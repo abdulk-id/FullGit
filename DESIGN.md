@@ -1,6 +1,6 @@
 # FullGit — design
 
-Status: **draft, Phase 0**. The names `fullgit` and `refs/fullgit/*` are placeholders.
+Status: **draft, Phase 1**.
 
 ## Goals
 

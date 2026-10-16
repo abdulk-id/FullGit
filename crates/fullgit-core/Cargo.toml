@@ -1,0 +1,15 @@
+[package]
+name = "fullgit-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+git2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ssh-key.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

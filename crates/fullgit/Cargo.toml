@@ -1,0 +1,16 @@
+[package]
+name = "fullgit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "fullgit"
+path = "src/main.rs"
+
+[dependencies]
+fullgit-core.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+git2.workspace = true
+serde_json.workspace = true

@@ -8,7 +8,9 @@
 //!
 //! Ops: `policy.genesis {owners}`, `policy.grant {identity, role, keep?}`,
 //! `policy.revoke {identity, keep}`, `policy.group_add {group, identity}`,
-//! `policy.group_remove {group, identity}`.
+//! `policy.group_remove {group, identity}`,
+//! `policy.protect {branch, approvals, group?, since?}` (0 approvals
+//! unprotects).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -33,6 +35,20 @@ pub struct Policy {
     /// removal kept.
     demotions: BTreeMap<Oid, Vec<(Role, Keep)>>,
     pub groups: BTreeMap<String, BTreeSet<Oid>>,
+    /// Merge rules, per target branch.
+    pub rules: BTreeMap<String, Rule>,
+}
+
+/// What merging a pull request into a branch takes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rule {
+    /// Approvals of the latest revision, by people other than its authors.
+    pub approvals: u32,
+    /// Only approvals from this group's members count.
+    pub group: Option<String>,
+    /// The branch's tip when it was protected. `fullgit verify` checks the
+    /// commits after it.
+    pub since: Option<Oid>,
 }
 
 impl Policy {
@@ -136,6 +152,33 @@ impl Model for Policy {
                 {
                     return Err(format!("{identity} is already in {group}"));
                 }
+                Ok(())
+            }
+            "policy.protect" => {
+                let branch = payload::str(p, "branch")?;
+                if !git2::Reference::is_valid_name(&format!("refs/heads/{branch}")) {
+                    return Err(format!("{branch:?} is not a branch name"));
+                }
+                let approvals = p["approvals"]
+                    .as_u64()
+                    .and_then(|n| u32::try_from(n).ok())
+                    .ok_or("approvals is not a count")?;
+                let group = payload::opt_str(p, "group")?.map(str::to_owned);
+                let since = payload::opt_str(p, "since")?
+                    .map(payload::parse_oid)
+                    .transpose()?;
+                let rule = (approvals > 0).then_some(Rule {
+                    approvals,
+                    group,
+                    since,
+                });
+                if self.rules.get(branch) == rule.as_ref() {
+                    return Err(format!("{branch} already has that rule"));
+                }
+                match rule {
+                    Some(r) => self.rules.insert(branch.to_owned(), r),
+                    None => self.rules.remove(branch),
+                };
                 Ok(())
             }
             "policy.group_remove" => {
@@ -315,6 +358,27 @@ pub fn group_remove(
         signer,
         "policy.group_remove",
         json!({ "group": group, "identity": identity.to_string() }),
+    )
+}
+
+/// Requires `approvals` approvals to merge into `branch`, from `group`'s
+/// members if given; `since` is the branch's tip. 0 removes the rule.
+pub fn protect(
+    repo: &Repository,
+    trust: &Trust,
+    signer: &dyn Signer,
+    branch: &str,
+    approvals: u32,
+    group: Option<&str>,
+    since: Option<Oid>,
+) -> Result<Oid> {
+    let since = since.map(|o| o.to_string());
+    update(
+        repo,
+        trust,
+        signer,
+        "policy.protect",
+        json!({ "branch": branch, "approvals": approvals, "group": group, "since": since }),
     )
 }
 

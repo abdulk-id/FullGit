@@ -11,6 +11,7 @@ pub mod model;
 pub mod op;
 pub mod payload;
 pub mod policy;
+pub mod pr;
 pub mod refs;
 pub mod remote;
 pub mod secret;
@@ -25,6 +26,7 @@ pub use issue::Issue;
 pub use model::{Ctx, Model};
 pub use op::{Op, StoredOp, read_op, write_op};
 pub use policy::Policy;
+pub use pr::Pr;
 pub use sign::{Signer, SshKeygenSigner, verify};
 pub use trust::{Actor, Role, Trust};
 

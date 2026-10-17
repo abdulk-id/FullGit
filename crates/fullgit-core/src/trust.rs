@@ -94,7 +94,11 @@ pub fn keep_from_json(payload: &serde_json::Value) -> Result<Keep, String> {
 pub fn keep_for(repo: &Repository, keys: &[KeyData]) -> Result<Keep> {
     let mut keep = Keep::new();
     for r in repo.references_glob(&format!("{}*", refs::PREFIX))? {
-        let Some(head) = r?.target() else { continue };
+        let r = r?;
+        if r.name().is_ok_and(|n| n.starts_with(refs::CODE_PREFIX)) {
+            continue;
+        }
+        let Some(head) = r.target() else { continue };
         let Ok(ops) = entity::load(repo, &[head]) else {
             continue;
         };

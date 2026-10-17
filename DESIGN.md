@@ -1,6 +1,6 @@
 # FullGit — design
 
-Status: **draft, Phase 6**.
+Status: **draft, Phase 7**.
 
 ## Goals
 
@@ -43,9 +43,12 @@ refs/fullgit/policy/<id>
 refs/fullgit/issues/<id>
 refs/fullgit/prs/<id>
 refs/fullgit/users/<identity-id>/local
+refs/fullgit/code/<commit>
 ```
 
 An entity's `<id>` is the hex oid of its root operation commit.
+`code/<commit>` refs aren't entities: each points at the commit it names,
+keeping a pull request's revisions reachable (see Pull requests).
 
 ### Operations
 
@@ -97,6 +100,9 @@ Commit timestamps are informational only and never used for ordering.
   - diverged → write a signed `merge` operation with both heads as parents
     (sorted). This is the only step that needs a signing key; without one,
     the entity is skipped until there is one.
+
+  A `code/<commit>` ref is taken only if it points at `<commit>`; it never
+  moves, so there is nothing to merge.
 
   Then push every local `refs/fullgit/*` ref without forcing. If another
   writer won the race, fetch, merge and push again (up to 3 rounds).
@@ -158,13 +164,17 @@ Commit timestamps are informational only and never used for ordering.
   entity. Ops the revoker hadn't seen, written later, or backdated onto
   old parents don't. Deterministic, and computed by the client that
   revokes.
-- **Protected branches** (Phase 6): `policy.rule {protect: "main",
-  approvals: 1}`. `fullgit verify main` checks that every first-parent commit
-  on `main` is a merge recorded by a valid `pr.merge` op. Pushes can't be
+- **Protected branches**: `policy.protect {branch, approvals, group?,
+  since?}` (0 approvals removes the rule). Merging a pull request into the
+  branch takes that many approvals of its latest revision, from contributors
+  and up other than the pull request's and the revision's authors, and only
+  from `group`'s members if set. `since` is the branch's tip when it was
+  protected. `fullgit verify <branch>` checks that every first-parent commit
+  after it is the recorded merge of a pull request. Pushes can't be
   prevented on a dumb host, only detected; use the host's branch protection
   alongside where it exists.
 - CLI: `fullgit policy init | show | grant | revoke | group add | group
-  remove`.
+  remove | protect | unprotect`.
 
 ## Secrets
 
@@ -295,14 +305,48 @@ Commit timestamps are informational only and never used for ordering.
 
 ## Pull requests
 
-- State: title, body, source and target branch, revisions `[{head, base, note}]`,
-  review comments, reviews, status (open/merged/closed).
-- Ops: `pr.create`, `pr.revise`, `pr.comment {revision, path, line, side}`,
-  `pr.review {verdict}`, `pr.merge {merge_commit}`, `pr.close`.
-- Source branches are ordinary branches on the remote.
-- `fullgit pr merge` checks the policy (required approvals on the latest
-  revision), merges locally with git, records `pr.merge`, and pushes the branch
-  and the refs.
+- State: title, description, author, source and target branch, status
+  (open/closed/merged), revisions `[{head, base, note, author}]`, comments
+  (general, on a line of a revision, or replies in a line comment's thread),
+  reviews, the merge, and a timeline.
+- A revision is the range `base..head`, where `base` is the merge base with
+  the target. `pr.create` is revision 1 and each `pr.revise` adds one.
+  Revisions are numbered in replay order, but operations name them by their
+  operation id, so concurrent revisions stay unambiguous.
+- Code travels with the pull request: creating or revising one points
+  `refs/fullgit/code/<commit>` at its head and base, and `fullgit sync`
+  pushes those refs. Reviewers get exactly the reviewed commits, even after
+  the branch is rewritten or deleted, and the branch never has to be pushed.
+  The pre-push hook checks those commits for secrets and per-user files like
+  any branch's.
+- Ops: `pr.create {title, body, source, target, head, base}`,
+  `pr.edit {title?, body?}`, `pr.revise {head, base, note?}`,
+  `pr.comment {body, revision?, path?, line?, side?}` or
+  `pr.comment {body, reply_to}`, `pr.comment_edit {comment, body}`,
+  `pr.review {revision, verdict: approve|changes, body?}`,
+  `pr.status {status}`, `pr.merge {revision, commit}`.
+- Permissions: contributors open pull requests, comment, and review other
+  people's. The author or a maintainer edits, revises, closes and reopens.
+  Maintainers merge. Merged is final: no more revisions, reviews or status
+  changes; comments are still allowed.
+- Reviews: each reviewer's latest review counts. An approval counts only for
+  the revision it names, so a new revision needs new approvals. A request for
+  changes blocks until that reviewer approves.
+- `fullgit pr merge` syncs, checks the target's rule under the current
+  policy, writes a merge commit with `git merge-tree` and `git commit-tree`
+  (so `commit.gpgSign` applies, and the working tree is untouched), pushes
+  it to the target without forcing, records `pr.merge`, and syncs again.
+  The commit message carries `Approved-by:` and `Fullgit-PR:` trailers.
+  Replay doesn't re-check the rule, which may have changed since; it
+  records who had approved the merged revision. If the target already
+  contains the revision, the merge is only recorded.
+- Line comments name a revision, a path, a line, and a side (`old` = base,
+  `new` = head). `fullgit pr show` prints the lines around them.
+- CLI: `fullgit pr new/list/show/diff/checkout/revise/comment/edit-comment/
+  edit/review/close/reopen/merge`, and `fullgit verify <branch>`.
+  `pr diff --since N` shows what changed since revision N (`git range-diff`
+  if the branch was rebased). Nothing but `pr merge` touches the remote
+  until `fullgit sync`.
 
 ## Implementation
 
@@ -327,7 +371,7 @@ Commit timestamps are informational only and never used for ordering.
 | 3. Secrets | Filter driver, age, guards, `rekey` | done (2026-10-17) |
 | 4. Per-user files | `local add/save/restore`, hooks | done (2026-10-17) |
 | 5. Issues | CLI: create, list, show, comment, close | done (2026-10-17) |
-| 6. PRs + review | Revisions, line comments, approvals, merge | |
+| 6. PRs + review | Revisions, line comments, approvals, merge | done (2026-10-17) |
 | 7. UX + reach | TUI or local web UI, GitHub/GitLab bridge, server hook | |
 
 ## Open questions
@@ -347,3 +391,8 @@ Commit timestamps are informational only and never used for ordering.
   `scripts/check-remote.sh` runs the check.
 - Scaling: thousands of entity refs make fetches slower. Entities may need
   packing into fewer refs later.
+- Pull requests: no dismissing a stale request for changes (its reviewer
+  has to approve, or lose their role); no squash or rebase merges; `git push`
+  doesn't record a revision by itself (`fullgit pr revise` does).
+- A secret or per-user file in a pull request's commits makes the pre-push
+  hook refuse the whole `fullgit sync`, not just that pull request.

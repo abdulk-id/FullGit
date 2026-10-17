@@ -94,6 +94,12 @@ pub fn push(repo: &Repository, remote: &str, skip: &[&str]) -> Result<bool> {
 /// `false` if the remote rejected any.
 pub fn push_refs(repo: &Repository, remote: &str, names: &[String]) -> Result<bool> {
     let specs: Vec<String> = names.iter().map(|n| format!("{n}:{n}")).collect();
+    push_specs(repo, remote, &specs)
+}
+
+/// Pushes `src:dst` refspecs without forcing. Returns `false` if the remote
+/// rejected any.
+pub fn push_specs(repo: &Repository, remote: &str, specs: &[String]) -> Result<bool> {
     if specs.is_empty() {
         return Ok(true);
     }
@@ -127,6 +133,12 @@ pub fn merge_tracking(
     }
 
     for (local, remote_head) in fetched {
+        if local.starts_with(refs::CODE_PREFIX) {
+            report
+                .refs
+                .insert(local.clone(), code(repo, &local, remote_head)?);
+            continue;
+        }
         let outcome = match check(repo, &local, remote_head) {
             Err(reason) => Outcome::Rejected(reason),
             Ok(()) => match entity::merge(repo, &local, signer, remote_head) {
@@ -141,6 +153,23 @@ pub fn merge_tracking(
         report.refs.insert(local, outcome);
     }
     Ok(())
+}
+
+/// Takes a code ref if it names its own target. Nothing else about it needs
+/// checking: it only matters once a signed pull request names its commit.
+fn code(repo: &Repository, local: &str, remote_head: Oid) -> Result<Outcome> {
+    let named = &local[refs::CODE_PREFIX.len()..];
+    if named != remote_head.to_string() {
+        return Ok(Outcome::Rejected(format!("points at {remote_head}")));
+    }
+    if repo.find_commit(remote_head).is_err() {
+        return Ok(Outcome::Rejected("not a commit".into()));
+    }
+    if repo.refname_to_id(local).is_ok() {
+        return Ok(Outcome::UpToDate);
+    }
+    repo.reference(local, remote_head, false, "fullgit: code")?;
+    Ok(Outcome::New)
 }
 
 /// Verifies the remote's version of an entity before it is allowed near the
@@ -168,7 +197,7 @@ fn check(repo: &Repository, local: &str, remote_head: Oid) -> Result<(), String>
     Ok(())
 }
 
-fn git(repo: &Repository, args: &[&str]) -> Result<()> {
+pub(crate) fn git(repo: &Repository, args: &[&str]) -> Result<()> {
     let out = git_output(repo, args)?;
     if out.status.success() {
         Ok(())
@@ -177,7 +206,7 @@ fn git(repo: &Repository, args: &[&str]) -> Result<()> {
     }
 }
 
-fn git_output(repo: &Repository, args: &[&str]) -> Result<std::process::Output> {
+pub(crate) fn git_output(repo: &Repository, args: &[&str]) -> Result<std::process::Output> {
     Ok(Command::new("git")
         .arg("--git-dir")
         .arg(repo.path())
@@ -185,7 +214,7 @@ fn git_output(repo: &Repository, args: &[&str]) -> Result<std::process::Output> 
         .output()?)
 }
 
-fn git_error(what: &str, out: &std::process::Output) -> Error {
+pub(crate) fn git_error(what: &str, out: &std::process::Output) -> Error {
     Error::Git(git2::Error::from_str(&format!(
         "git {what} failed: {}",
         String::from_utf8_lossy(&out.stderr).trim()

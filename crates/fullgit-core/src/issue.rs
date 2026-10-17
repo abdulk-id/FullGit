@@ -226,11 +226,11 @@ impl Model for Issue {
 }
 
 /// An operation's commit time, from its author's clock.
-fn time(repo: &Repository, op: Oid) -> i64 {
+pub(crate) fn time(repo: &Repository, op: Oid) -> i64 {
     repo.find_commit(op).map_or(0, |c| c.time().seconds())
 }
 
-fn title(s: &str) -> Result<String, String> {
+pub(crate) fn title(s: &str) -> Result<String, String> {
     let t = s.trim();
     if t.is_empty() || t.contains('\n') {
         return Err("a title is one non-empty line".into());
@@ -238,7 +238,7 @@ fn title(s: &str) -> Result<String, String> {
     Ok(t.to_owned())
 }
 
-fn text(s: &str) -> Result<String, String> {
+pub(crate) fn text(s: &str) -> Result<String, String> {
     if s.trim().is_empty() {
         return Err("empty text".into());
     }

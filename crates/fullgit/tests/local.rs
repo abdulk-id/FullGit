@@ -166,4 +166,22 @@ fn per_user_files_are_neither_committed_nor_pushed() {
     assert!(!out.ok, "pre-push should refuse");
     assert!(out.stderr.contains("refusing to push"), "{}", out.stderr);
     assert_eq!(git(&remote, &["rev-parse", "master"]), before);
+
+    // Nor as a pull request's commits, which `fullgit sync` pushes.
+    git(&alice, &["branch", "oops"]);
+    git(&alice, &["reset", "-q", "--hard", "origin/master"]);
+    fg_ok(
+        &alice,
+        &[
+            "pr", "new", "--source", "oops", "--target", "master", "-t", "Oops",
+        ],
+    );
+    let out = fg(&alice, &["sync"]);
+    assert!(
+        !out.ok && out.stderr.contains("refusing to push"),
+        "{}",
+        out.stderr
+    );
+    let code = git(&remote, &["for-each-ref", "refs/fullgit/code/"]);
+    assert_eq!(code, "");
 }

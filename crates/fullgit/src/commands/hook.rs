@@ -37,7 +37,7 @@ pub fn run(repo: &Repository, name: &str, args: &[String]) -> Result<()> {
             let remote = args.first().map(String::as_str).unwrap_or("origin");
             let tracking = format!("refs/remotes/{remote}/*");
             let mut found = Vec::new();
-            let mut pushes_code = false;
+            let mut pushes_branches = false;
             for line in std::io::stdin().lock().lines() {
                 let line = line?;
                 let fields: Vec<&str> = line.split_whitespace().collect();
@@ -45,10 +45,12 @@ pub fn run(repo: &Repository, name: &str, args: &[String]) -> Result<()> {
                     continue;
                 };
                 let local = Oid::from_str(local)?;
-                if local.is_zero() || remote_ref.starts_with(refs::PREFIX) {
-                    continue; // a deletion, or fullgit's own refs
+                // Pull requests' commits are code like any branch's.
+                let code = remote_ref.starts_with(refs::CODE_PREFIX);
+                if local.is_zero() || (remote_ref.starts_with(refs::PREFIX) && !code) {
+                    continue; // a deletion, or fullgit's operations
                 }
-                pushes_code = true;
+                pushes_branches |= !code;
                 let hide = [Oid::from_str(remote_oid)?];
                 found.extend(guard::in_commits(repo, local, &hide, &[&tracking])?);
             }
@@ -65,7 +67,7 @@ pub fn run(repo: &Repository, name: &str, args: &[String]) -> Result<()> {
             }
             // A push of fullgit's refs alone is `fullgit sync`, or the push
             // below; saving there would recurse.
-            if pushes_code && let Err(e) = save_local(repo, remote) {
+            if pushes_branches && let Err(e) = save_local(repo, remote) {
                 eprintln!("fullgit: didn't save your per-user files: {e:#}");
             }
         }

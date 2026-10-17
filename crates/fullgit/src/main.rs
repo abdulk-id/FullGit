@@ -51,6 +51,18 @@ enum Cmd {
     /// Issues.
     #[command(subcommand)]
     Issue(commands::issue::IssueCmd),
+    /// Pull requests and their review.
+    #[command(subcommand)]
+    Pr(commands::pr::PrCmd),
+    /// Check that every commit on a protected branch since it was
+    /// protected was merged through a pull request. Uses this clone's copy:
+    /// `git fetch` and `fullgit sync` first.
+    Verify {
+        /// The remote's default branch by default.
+        branch: Option<String>,
+        #[arg(long, default_value = "origin")]
+        remote: String,
+    },
     /// Check this clone's setup.
     Doctor,
     /// Low-level commands for inspecting and writing operation logs.
@@ -123,6 +135,8 @@ fn main() -> Result<()> {
         Cmd::Secret(cmd) => commands::secret::run(&repo, cmd)?,
         Cmd::Local(cmd) => commands::local::run(&repo, cmd)?,
         Cmd::Issue(cmd) => commands::issue::run(&repo, cmd)?,
+        Cmd::Pr(cmd) => commands::pr::run(&repo, cmd)?,
+        Cmd::Verify { branch, remote } => commands::pr::verify(&repo, branch, &remote)?,
         Cmd::Doctor => commands::doctor::run(&repo)?,
         Cmd::FilterProcess => commands::secret::filter_process(&repo)?,
         Cmd::Textconv { file } => commands::secret::textconv(&repo, &file)?,

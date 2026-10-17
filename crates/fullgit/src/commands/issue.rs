@@ -346,14 +346,14 @@ fn show(trust: &Trust, id: Oid, i: &Issue) {
     }
 }
 
-fn print_indented(text: &str) {
+pub(crate) fn print_indented(text: &str) {
     for line in text.trim_end().lines() {
         println!("    {line}");
     }
 }
 
 /// A person's name, or a short id if their identity isn't known here.
-fn who(trust: &Trust, id: Option<Oid>) -> String {
+pub(crate) fn who(trust: &Trust, id: Option<Oid>) -> String {
     match id {
         Some(id) => trust
             .identities
@@ -363,12 +363,12 @@ fn who(trust: &Trust, id: Option<Oid>) -> String {
     }
 }
 
-fn short_id(id: Oid) -> String {
+pub(crate) fn short_id(id: Oid) -> String {
     id.to_string()[..8].to_owned()
 }
 
 /// Splits editor text into a title (the first line) and a description.
-fn split_title(text: &str) -> Result<(String, String)> {
+pub(crate) fn split_title(text: &str) -> Result<(String, String)> {
     let text = text.trim();
     let (title, body) = text.split_once('\n').unwrap_or((text, ""));
     if title.trim().is_empty() {
@@ -379,7 +379,7 @@ fn split_title(text: &str) -> Result<(String, String)> {
 
 /// Lets the user write text in git's editor. Lines starting with `#` are
 /// dropped; empty text aborts.
-fn editor(repo: &Repository, initial: &str, help: &str) -> Result<String> {
+pub(crate) fn editor(repo: &Repository, initial: &str, help: &str) -> Result<String> {
     let out = std::process::Command::new("git")
         .arg("--git-dir")
         .arg(repo.path())

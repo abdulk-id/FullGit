@@ -22,3 +22,12 @@ pub fn fetch_refspec(remote: &str) -> String {
 }
 
 pub const PUSH_REFSPEC: &str = "refs/fullgit/*:refs/fullgit/*";
+
+/// Refs that keep a pull request's commits: `refs/fullgit/code/<oid>`
+/// points at `<oid>`. Content-addressed, so they never move, and sync
+/// accepts one only if its name is its target.
+pub const CODE_PREFIX: &str = "refs/fullgit/code/";
+
+pub fn code_refname(commit: git2::Oid) -> String {
+    format!("{CODE_PREFIX}{commit}")
+}

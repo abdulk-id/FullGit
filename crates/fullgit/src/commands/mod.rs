@@ -6,4 +6,5 @@ pub mod id;
 pub mod issue;
 pub mod local;
 pub mod policy;
+pub mod pr;
 pub mod secret;

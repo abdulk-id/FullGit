@@ -5,6 +5,7 @@ use clap::Subcommand;
 use fullgit_core::{Role, Trust, policy};
 use git2::Repository;
 
+use crate::commands::pr::tip;
 use crate::{describe, me, resolve};
 
 /// Identities are named by `me`, an email, or an id prefix.
@@ -26,6 +27,23 @@ pub enum PolicyCmd {
     /// Manage named groups, e.g. who can read a secret.
     #[command(subcommand)]
     Group(GroupCmd),
+    /// Require approvals to merge pull requests into a branch. `fullgit pr
+    /// merge` enforces it; the host still decides who may push the branch.
+    Protect {
+        branch: String,
+        /// Approvals of the latest revision, from people other than its
+        /// authors.
+        #[arg(long, default_value_t = 1)]
+        approvals: u32,
+        /// Only count approvals from this group.
+        #[arg(long)]
+        group: Option<String>,
+        /// Whose copy of the branch marks where `fullgit verify` starts.
+        #[arg(long, default_value = "origin")]
+        remote: String,
+    },
+    /// Remove a branch's merge rule.
+    Unprotect { branch: String },
 }
 
 #[derive(Subcommand)]
@@ -74,6 +92,16 @@ pub fn run(repo: &Repository, cmd: PolicyCmd) -> Result<()> {
                     println!("  {}", describe(&trust, *id));
                 }
             }
+            for (branch, rule) in &policy.rules {
+                let from = rule
+                    .group
+                    .as_ref()
+                    .map_or(String::new(), |g| format!(" from {g}"));
+                println!(
+                    "branch {branch}: merging takes {} approval(s){from}",
+                    rule.approvals
+                );
+            }
         }
         PolicyCmd::Grant { who, role } => {
             let trust = Trust::load(repo)?;
@@ -91,6 +119,43 @@ pub fn run(repo: &Repository, cmd: PolicyCmd) -> Result<()> {
                 "revoked {}; operations they signed that this clone has already seen stay valid",
                 describe(&trust, id)
             );
+        }
+        PolicyCmd::Protect {
+            branch,
+            approvals,
+            group,
+            remote,
+        } => {
+            if approvals == 0 {
+                bail!("use `fullgit policy unprotect {branch}`");
+            }
+            let trust = Trust::load(repo)?;
+            let (signer, _) = me(repo, &trust)?;
+            // Changing a rule keeps where it began.
+            let since = match trust
+                .policy
+                .as_ref()
+                .and_then(|(_, p)| p.rules.get(&branch))
+            {
+                Some(rule) => rule.since,
+                None => tip(repo, &remote, &branch).ok(),
+            };
+            policy::protect(
+                repo,
+                &trust,
+                &signer,
+                &branch,
+                approvals,
+                group.as_deref(),
+                since,
+            )?;
+            println!("merging into {branch} now takes {approvals} approval(s)");
+        }
+        PolicyCmd::Unprotect { branch } => {
+            let trust = Trust::load(repo)?;
+            let (signer, _) = me(repo, &trust)?;
+            policy::protect(repo, &trust, &signer, &branch, 0, None, None)?;
+            println!("{branch} has no merge rule");
         }
         PolicyCmd::Group(cmd) => {
             let trust = Trust::load(repo)?;

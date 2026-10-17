@@ -1,13 +1,8 @@
 {
   "v": 1,
-  "type": "issue.create",
-  "lamport": 1,
+  "type": "issue.comment",
+  "lamport": 2,
   "payload": {
-    "body": "Any action, like creating an issue or changing assignees, redirects to an empty page saying \"cross-origin request refused.\"",
-    "labels": [
-      "bug"
-    ],
-    "nonce": "18df637926b00e6412573e",
-    "title": "Fix Refusals of taking actions from the Web UI"
+    "body": "Fixed in a4e2c9e"
   }
 }

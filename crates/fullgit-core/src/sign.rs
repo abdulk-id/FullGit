@@ -41,8 +41,20 @@ impl SshKeygenSigner {
             p.push(".pub");
             PathBuf::from(p)
         };
-        let public_key = PublicKey::read_openssh_file(&pub_path)
-            .map_err(|e| Error::Signature(format!("reading {}: {e}", pub_path.display())))?;
+        let ed25519_only = || {
+            format!(
+                "{} is not an ed25519 key; fullgit only supports those so far \
+                 (`ssh-keygen -t ed25519` makes one)",
+                pub_path.display()
+            )
+        };
+        let public_key = PublicKey::read_openssh_file(&pub_path).map_err(|e| match e {
+            ssh_key::Error::AlgorithmUnknown => Error::Signature(ed25519_only()),
+            e => Error::Signature(format!("reading {}: {e}", pub_path.display())),
+        })?;
+        if public_key.algorithm() != ssh_key::Algorithm::Ed25519 {
+            return Err(Error::Signature(ed25519_only()));
+        }
         Ok(Self {
             key_path,
             public_key,

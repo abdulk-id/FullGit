@@ -379,8 +379,8 @@ Commit timestamps are informational only and never used for ordering.
 
 - Rust workspace:
   - `crates/fullgit-core`: library (operations, entities, policy, crypto).
-  - `crates/fullgit`: the CLI. Installed as `fullgit` and as `git-fullgit`, so
-    `git fullgit ...` also works.
+  - `crates/fullgit`: the CLI. A `git-fullgit` link to it makes
+    `git fullgit ...` work too (see README).
 - **git2** (libgit2, vendored) for objects and refs. Its `commit_signed` and
   `extract_signature` map exactly onto the operation format. gix was considered;
   its write-side API is still moving, so revisit later.

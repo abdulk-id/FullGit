@@ -230,3 +230,17 @@ fn ops_survive_push_and_fetch_through_bare_remote() {
     assert_eq!(ops[1].op.payload, json!({ "body": "yo" }));
     assert_eq!(&ops[1].signer, signer.public_key().key_data());
 }
+
+#[test]
+fn only_ed25519_keys_sign() {
+    let fx = Fixture::new();
+    let key = fx.path("id_rsa");
+    let status = std::process::Command::new("ssh-keygen")
+        .args(["-q", "-t", "rsa", "-b", "2048", "-N", "", "-f"])
+        .arg(&key)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let err = fullgit_core::SshKeygenSigner::new(&key).err().unwrap();
+    assert!(err.to_string().contains("not an ed25519 key"), "{err}");
+}

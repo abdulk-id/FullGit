@@ -5,6 +5,8 @@ members = ["crates/fullgit-core", "crates/fullgit"]
 [workspace.package]
 version = "0.0.1"
 edition = "2024"
+# let-chains
+rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]

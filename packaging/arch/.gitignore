@@ -1,6 +1,6 @@
-# makepkg output
-/src/
-/pkg/
-/FullGit/
-*.pkg.tar.*
-*.log
+*
+
+# Ignore all except the packaging files
+!.gitignore
+!.SRCINFO
+!PKGBUILD

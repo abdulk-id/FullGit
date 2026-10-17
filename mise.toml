@@ -1,2 +1,7 @@
 [tools]
 rust = { version = "stable", components = ["rust-src"] }
+
+[tasks.archpkg]
+description = "Install as Arch package"
+dir = "{{config_root}}/packaging/arch"
+run = "makepkg --syncdeps --install --nodeps"

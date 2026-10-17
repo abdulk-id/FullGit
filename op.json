@@ -1,13 +1,11 @@
 {
   "v": 1,
-  "type": "issue.create",
-  "lamport": 1,
+  "type": "issue.assign",
+  "lamport": 2,
   "payload": {
-    "body": "Issues can be tested using this issue",
-    "labels": [
-      "testing"
+    "add": [
+      "263092993af6842217b878a7df569a5686944a9e"
     ],
-    "nonce": "18df633d9c4e1701125230",
-    "title": "Test FullGit Issue functionality"
+    "remove": []
   }
 }

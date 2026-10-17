@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use ssh_key::public::KeyData;
-use ssh_key::{PublicKey, SshSig};
+use ssh_key::{HashAlg, LineEnding, PrivateKey, PublicKey, SshSig};
 
 use crate::{Error, Result};
 
@@ -60,6 +60,62 @@ impl SshKeygenSigner {
         })
     }
 
+    /// The private key's file: `key_path` without `.pub`.
+    pub fn private_key_path(&self) -> PathBuf {
+        match self.key_path.extension() {
+            Some(e) if e == "pub" => self.key_path.with_extension(""),
+            _ => self.key_path.clone(),
+        }
+    }
+
+    /// Whether signing would stop to ask for a passphrase: the key file is
+    /// encrypted, and ssh-agent doesn't hold the key. A key file that can't
+    /// be read is taken to live in an agent.
+    pub fn needs_passphrase(&self) -> bool {
+        let Ok(key) = PrivateKey::read_openssh_file(&self.private_key_path()) else {
+            return false;
+        };
+        key.is_encrypted() && !self.in_agent()
+    }
+
+    fn in_agent(&self) -> bool {
+        let Ok(out) = Command::new("ssh-add")
+            .arg("-L")
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+        else {
+            return false;
+        };
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|l| PublicKey::from_openssh(l).ok())
+            .any(|k| k.key_data() == self.public_key.key_data())
+    }
+
+    /// Decrypts the private key into memory with its passphrase.
+    pub fn unlock(&self, passphrase: &str) -> Result<KeySigner> {
+        let path = self.private_key_path();
+        let key = PrivateKey::read_openssh_file(&path)
+            .map_err(|e| Error::Signature(format!("reading {}: {e}", path.display())))?;
+        let key = match key.is_encrypted() {
+            true => key
+                .decrypt(passphrase)
+                .map_err(|_| Error::Signature("wrong passphrase".into()))?,
+            false => key,
+        };
+        if key.public_key().key_data() != self.public_key.key_data() {
+            return Err(Error::Signature(format!(
+                "{} doesn't match its public key",
+                path.display()
+            )));
+        }
+        Ok(KeySigner {
+            public_key: key.public_key().clone(),
+            key,
+        })
+    }
+
     /// Uses the repository's `user.signingkey`, the same key git signs with.
     pub fn from_git_config(repo: &git2::Repository) -> Result<Self> {
         let key = repo
@@ -104,6 +160,29 @@ impl Signer for SshKeygenSigner {
         let mut sig = file.into_os_string();
         sig.push(".sig");
         Ok(std::fs::read_to_string(sig)?)
+    }
+}
+
+/// Signs with a private key held in memory, as ssh-agent does. For
+/// `fullgit web`, which has no terminal to ask for a passphrase on each
+/// signature. The key is wiped from memory when dropped.
+#[derive(Clone)]
+pub struct KeySigner {
+    key: PrivateKey,
+    public_key: PublicKey,
+}
+
+impl Signer for KeySigner {
+    fn public_key(&self) -> &PublicKey {
+        &self.public_key
+    }
+
+    fn sign_as(&self, namespace: &str, data: &[u8]) -> Result<String> {
+        // What ssh-keygen -Y sign writes.
+        self.key
+            .sign(namespace, HashAlg::Sha512, data)
+            .and_then(|sig| sig.to_pem(LineEnding::LF))
+            .map_err(|e| Error::Signature(e.to_string()))
     }
 }
 

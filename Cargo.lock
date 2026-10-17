@@ -1855,8 +1855,15 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "caac132742f0d33c3af65bfcde7f6aa8f62f0e991d80db99149eb9d44708784f"
 dependencies = [
+ "aes",
+ "aes-gcm",
+ "cbc",
+ "chacha20",
  "cipher",
+ "ctr",
+ "poly1305",
  "ssh-encoding",
+ "subtle",
 ]
 
 [[package]]
@@ -1876,6 +1883,7 @@ version = "0.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3b86f5297f0f04d08cabaa0f6bff7cb6aec4d9c3b49d87990d63da9d9156a8c3"
 dependencies = [
+ "bcrypt-pbkdf",
  "ed25519-dalek",
  "p256",
  "p384",

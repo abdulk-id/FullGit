@@ -775,7 +775,7 @@ pub fn act(ctx: &Ctx, req: &Req, id: Oid, action: &str) -> Result<Resp> {
     let here = format!("/prs/{}", ctx.prs.of(id));
     let back_to = super::back_of(req).to_owned();
     if action == "merge" {
-        let msg = merge_now(ctx.repo, id, ctx.remote)?;
+        let msg = merge_now(ctx.repo, ctx.signer()?, id, ctx.remote)?;
         return Ok(Resp::Redirect(with_param(&here, "msg", &msg)));
     }
     let signer = ctx.signer()?;

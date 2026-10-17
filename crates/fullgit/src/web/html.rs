@@ -173,10 +173,11 @@ h2{font-size:16px;margin:0 0 10px}
 .btn{font:inherit;padding:4px 12px;border:1px solid var(--line);border-radius:6px;background:var(--soft);color:var(--fg);cursor:pointer}
 .btn:hover{border-color:var(--muted)}.btn.primary{background:var(--open);border-color:var(--open);color:#fff}
 .btn.danger{color:var(--closed)}.btn:disabled{opacity:.5;cursor:not-allowed}
-input[type=text],textarea,select{font:inherit;width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
+input[type=text],input[type=password],textarea,select{font:inherit;width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
 textarea{min-height:90px;resize:vertical}
 .flash{padding:10px 14px;border-radius:6px;margin-bottom:16px;border:1px solid var(--line)}
 .flash.ok{background:var(--add)}.flash.err{background:var(--del)}
+.flash.lock input{width:16em;margin:6px 6px 0 0}
 .state{display:inline-block;padding:3px 10px;border-radius:999px;color:#fff;font-size:13px;font-weight:600}
 .state.open{background:var(--open)}.state.closed{background:var(--closed)}.state.merged{background:var(--merged)}
 .meta{color:var(--muted);margin-bottom:16px}.meta b{color:var(--fg)}

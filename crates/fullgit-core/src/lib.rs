@@ -27,7 +27,7 @@ pub use model::{Ctx, Model};
 pub use op::{Op, StoredOp, read_op, write_op};
 pub use policy::Policy;
 pub use pr::Pr;
-pub use sign::{Signer, SshKeygenSigner, verify};
+pub use sign::{KeySigner, Signer, SshKeygenSigner, verify};
 pub use trust::{Actor, Role, Trust};
 
 #[derive(Debug, thiserror::Error)]

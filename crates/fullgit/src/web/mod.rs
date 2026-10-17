@@ -7,6 +7,11 @@
 //! a POST's `Origin`, when sent, must be this server. Pages run no
 //! scripts; the content security policy forbids them.
 //!
+//! The server never asks for a passphrase on its terminal, where nobody
+//! is looking: a key that needs one, and that ssh-agent doesn't hold, is
+//! unlocked from the page and kept in memory until the server stops, as
+//! ssh-agent would keep it.
+//!
 //! Requests are served one at a time. GETs never change anything; each
 //! POST does one thing and redirects back, with a message.
 
@@ -14,18 +19,18 @@ mod html;
 mod issues;
 mod prs;
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io::Read;
 
 use anyhow::{Context, Result, bail};
 use fullgit_core::model::{self, Abbrev};
 use fullgit_core::sync::{self, Outcome};
-use fullgit_core::{Role, Signer, SshKeygenSigner, Trust, issue, pr};
+use fullgit_core::{KeySigner, Role, Signer, Trust, issue, pr};
 use git2::{Oid, Repository};
 use tiny_http::{Header, Method, Request, Response, Server};
 
-use crate::me;
-use html::{Page, esc, url_encode};
+use html::{Page, back, esc, url_encode};
 
 pub struct Options {
     pub port: u16,
@@ -57,6 +62,7 @@ pub fn serve(repo_path: &std::path::Path, opts: Options) -> Result<()> {
         token,
         port,
         remote: opts.remote,
+        unlocked: RefCell::new(None),
     };
     for request in server.incoming_requests() {
         app.handle(request);
@@ -82,6 +88,8 @@ struct App {
     token: String,
     port: u16,
     remote: String,
+    /// Your key, decrypted with the passphrase given on a page.
+    unlocked: RefCell<Option<KeySigner>>,
 }
 
 /// One parsed request.
@@ -131,8 +139,14 @@ pub enum Resp {
 pub struct Ctx<'a> {
     pub repo: &'a Repository,
     pub trust: Trust,
-    /// Your signer and identity, if your key has one.
-    pub me: Option<(SshKeygenSigner, Oid)>,
+    /// Your identity, if your key has one.
+    pub me: Option<Oid>,
+    /// What signs for you; `None` while your key is locked.
+    pub signer: Option<Box<dyn Signer>>,
+    /// Whether your key was unlocked on a page, so it can be locked again.
+    pub unlocked: bool,
+    /// Your key's file, to say which passphrase is wanted.
+    pub key_name: String,
     pub remote: &'a str,
     pub name: String,
     /// How issues and pull requests are named in URLs and on pages.
@@ -142,13 +156,19 @@ pub struct Ctx<'a> {
 
 impl Ctx<'_> {
     pub fn me_id(&self) -> Option<Oid> {
-        self.me.as_ref().map(|(_, id)| *id)
+        self.me
     }
 
-    pub fn signer(&self) -> Result<&SshKeygenSigner> {
-        match &self.me {
-            Some((s, _)) => Ok(s),
-            None => bail!("your signing key belongs to no identity; run `fullgit id create`"),
+    /// Whether you have an identity, but your key needs its passphrase.
+    pub fn locked(&self) -> bool {
+        self.me.is_some() && self.signer.is_none()
+    }
+
+    pub fn signer(&self) -> Result<&dyn Signer> {
+        match (&self.signer, self.me) {
+            (Some(s), Some(_)) => Ok(s.as_ref()),
+            (_, None) => bail!("your signing key belongs to no identity; run `fullgit id create`"),
+            (None, Some(_)) => bail!("your key is locked; unlock it with its passphrase first"),
         }
     }
 
@@ -176,13 +196,6 @@ impl Ctx<'_> {
     }
 
     pub fn page(&self, req: &Req, title: &str, body: String) -> Resp {
-        let me = match self.me_id() {
-            Some(id) => {
-                let role = crate::role_name(&self.trust, id);
-                format!("{} {}", self.person(Some(id)), esc(role))
-            }
-            None => "read-only: your key has no identity".into(),
-        };
         let path = match req
             .query
             .iter()
@@ -191,6 +204,28 @@ impl Ctx<'_> {
         {
             0 => req.path.clone(),
             _ => format!("{}?{}", req.path, query_string(&req.query)),
+        };
+        let me = match self.me_id() {
+            Some(id) => {
+                let role = crate::role_name(&self.trust, id);
+                let lock = match self.unlocked {
+                    true => format!(
+                        r#" <form class="inline" method="post" action="/lock">{}<button class="btn" title="Forget the decrypted key">Lock key</button></form>"#,
+                        back(&path)
+                    ),
+                    false => String::new(),
+                };
+                format!("{} {}{lock}", self.person(Some(id)), esc(role))
+            }
+            None => "read-only: your key has no identity".into(),
+        };
+        let body = match self.locked() {
+            true => format!(
+                r#"<form class="flash lock" method="post" action="/unlock">{}<label for="passphrase">Your key <code>{}</code> needs its passphrase before you can change anything. fullgit keeps it unlocked in memory until the server stops.</label> <input type="password" id="passphrase" name="passphrase" autocomplete="off" required> <button class="btn">Unlock</button></form>{body}"#,
+                back(&path),
+                esc(&self.key_name),
+            ),
+            false => body,
         };
         Resp::Html(
             200,
@@ -296,6 +331,24 @@ impl App {
         Ok(None)
     }
 
+    /// Decrypts your key with the passphrase from the page, or forgets it.
+    fn unlock(&self, repo: &Repository, req: &Req) -> Result<Resp> {
+        let msg = if req.path == "/lock" {
+            *self.unlocked.borrow_mut() = None;
+            "Key locked."
+        } else {
+            let key = crate::signer(repo)?
+                .unlock(req.field("passphrase").unwrap_or_default())
+                .map_err(|e| match e {
+                    fullgit_core::Error::Signature(why) => anyhow::anyhow!(why),
+                    e => e.into(),
+                })?;
+            *self.unlocked.borrow_mut() = Some(key);
+            "Key unlocked until the server stops."
+        };
+        Ok(Resp::Redirect(with_param(back_of(req), "msg", msg)))
+    }
+
     /// Cookies are shared across ports, so each server names its own.
     fn cookie(&self) -> String {
         format!("fullgit_{}", self.port)
@@ -323,8 +376,32 @@ impl App {
 
     fn route(&self, req: &Req) -> Result<Resp> {
         let repo = Repository::open(&self.repo_path)?;
+        if req.method == Method::Post && matches!(req.path.as_str(), "/unlock" | "/lock") {
+            return self.unlock(&repo, req);
+        }
         let trust = Trust::load(&repo)?;
-        let me = me(&repo, &trust).ok();
+        let key = crate::signer(&repo).ok();
+        let me = key
+            .as_ref()
+            .and_then(|k| crate::identity_of(&trust, k).ok());
+        let key_name = key
+            .as_ref()
+            .map(|k| {
+                let path = k.private_key_path();
+                match std::env::var_os("HOME").and_then(|h| path.strip_prefix(h).ok()) {
+                    Some(rest) => format!("~/{}", rest.display()),
+                    None => path.display().to_string(),
+                }
+            })
+            .unwrap_or_default();
+        let unlocked = self.unlocked.borrow().clone();
+        let (signer, unlocked): (Option<Box<dyn Signer>>, bool) = match (key, unlocked) {
+            (Some(k), Some(u)) if u.public_key() == k.public_key() => (Some(Box::new(u)), true),
+            // Signing would ask on the terminal.
+            (Some(k), _) if k.needs_passphrase() => (None, false),
+            (Some(k), _) => (Some(Box::new(k)), false),
+            (None, _) => (None, false),
+        };
         let name = self
             .repo_path
             .file_name()
@@ -333,6 +410,9 @@ impl App {
             repo: &repo,
             trust,
             me,
+            signer,
+            unlocked,
+            key_name,
             remote: &self.remote,
             name,
             issues: model::abbrev::<issue::Issue>(&repo)?,
@@ -432,7 +512,7 @@ fn people(ctx: &Ctx) -> String {
 
 fn sync_now(ctx: &Ctx, req: &Req) -> Result<Resp> {
     // Without a key we can still fetch, fast-forward and push.
-    let signer = ctx.me.as_ref().map(|(s, _)| s as &dyn Signer);
+    let signer = ctx.signer().ok();
     let report = sync::sync(ctx.repo, ctx.remote, signer)?;
     let count = |f: fn(&Outcome) -> bool| report.refs.values().filter(|o| f(o)).count();
     let new = count(|o| matches!(o, Outcome::New | Outcome::FastForwarded | Outcome::Merged));

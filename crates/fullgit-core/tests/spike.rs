@@ -244,3 +244,42 @@ fn only_ed25519_keys_sign() {
     let err = fullgit_core::SshKeygenSigner::new(&key).err().unwrap();
     assert!(err.to_string().contains("not an ed25519 key"), "{err}");
 }
+
+/// `fullgit web` unlocks a key once and signs in memory; the signatures
+/// must be ones OpenSSH, and so git, accepts.
+#[test]
+fn unlocked_keys_sign_like_ssh_keygen() {
+    let fx = Fixture::new();
+    let key = fx.path("locked");
+    let status = std::process::Command::new("ssh-keygen")
+        .args(["-q", "-t", "ed25519", "-N", "s3cret", "-C", "t", "-f"])
+        .arg(&key)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let signer = fullgit_core::SshKeygenSigner::new(format!("{}.pub", key.display())).unwrap();
+    assert_eq!(signer.private_key_path(), key);
+    assert!(signer.needs_passphrase());
+
+    let err = signer.unlock("guess").err().unwrap();
+    assert!(err.to_string().contains("wrong passphrase"), "{err}");
+    let unlocked = signer.unlock("s3cret").unwrap();
+    let sig = unlocked.sign(b"hello").unwrap();
+    assert_eq!(
+        fullgit_core::verify(b"hello", &sig).unwrap(),
+        *signer.public_key().key_data()
+    );
+
+    let sig_file = fx.path("sig");
+    std::fs::write(&sig_file, &sig).unwrap();
+    let mut check = std::process::Command::new("ssh-keygen")
+        .args(["-Y", "check-novalidate", "-n", "git", "-s"])
+        .arg(&sig_file)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    use std::io::Write;
+    check.stdin.take().unwrap().write_all(b"hello").unwrap();
+    assert!(check.wait().unwrap().success());
+}

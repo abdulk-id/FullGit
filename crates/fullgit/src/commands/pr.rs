@@ -7,11 +7,11 @@ use clap::{ArgGroup, Subcommand};
 use fullgit_core::model::{self, Abbrev};
 use fullgit_core::pr::{self, Location, Merging, Place, Pr, Readiness, Revision, Side, Status};
 use fullgit_core::pr::{Verdict, What};
-use fullgit_core::{Role, Trust, sync};
+use fullgit_core::{Role, Signer, Trust, sync};
 use git2::{Oid, Repository};
 
 use crate::commands::issue::{editor, print_indented, short_id, split_title, who};
-use crate::{date, me, short, signer};
+use crate::{date, identity_of, me, short, signer};
 
 /// Pull requests are named by a prefix of their id, as `fullgit pr list`
 /// shows, and revisions by number: 1 is the first.
@@ -489,17 +489,22 @@ pub(crate) fn range(
 
 fn merge(repo: &Repository, id: &str, remote: &str) -> Result<()> {
     let id = pr::resolve(repo, id)?;
-    println!("{}", merge_now(repo, id, remote)?);
+    println!("{}", merge_now(repo, &signer(repo)?, id, remote)?);
     Ok(())
 }
 
 /// Merges pull request `id` into its target on `remote` and records it.
 /// Returns what happened, for people.
-pub(crate) fn merge_now(repo: &Repository, id: Oid, remote: &str) -> Result<String> {
+pub(crate) fn merge_now(
+    repo: &Repository,
+    signer: &dyn Signer,
+    id: Oid,
+    remote: &str,
+) -> Result<String> {
     // Decide on everyone's latest reviews, revisions and rules.
-    sync::sync(repo, remote, Some(&signer(repo)?))?;
+    sync::sync(repo, remote, Some(signer))?;
     let trust = Trust::load(repo)?;
-    let (signer, me) = me(repo, &trust)?;
+    let me = identity_of(&trust, signer)?;
     let p = pr::load(repo, &trust, id)?.model;
     match p.status {
         Status::Open => {}
@@ -550,8 +555,8 @@ pub(crate) fn merge_now(repo: &Repository, id: Oid, remote: &str) -> Result<Stri
             }
         }
     };
-    pr::record_merge(repo, &trust, &signer, id, latest.id, commit)?;
-    sync::sync(repo, remote, Some(&signer))?;
+    pr::record_merge(repo, &trust, signer, id, latest.id, commit)?;
+    sync::sync(repo, remote, Some(signer))?;
     Ok(format!(
         "{done}merged pull request {} into {} as {}; `git pull` brings it here",
         name(repo, id)?,

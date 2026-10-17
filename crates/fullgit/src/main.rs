@@ -251,14 +251,17 @@ pub(crate) fn signer(repo: &Repository) -> Result<SshKeygenSigner> {
 /// Your signer and the identity holding its key.
 pub(crate) fn me(repo: &Repository, trust: &Trust) -> Result<(SshKeygenSigner, Oid)> {
     let signer = signer(repo)?;
+    let id = identity_of(trust, &signer)?;
+    Ok((signer, id))
+}
+
+/// The identity holding `signer`'s key.
+pub(crate) fn identity_of(trust: &Trust, signer: &dyn Signer) -> Result<Oid> {
     match trust
         .identities_with_key(signer.public_key().key_data())
         .as_slice()
     {
-        [id] => {
-            let id = *id;
-            Ok((signer, id))
-        }
+        [id] => Ok(*id),
         [] => bail!("your signing key belongs to no identity; run `fullgit id create`"),
         ids => bail!(
             "your signing key belongs to several identities: {}",

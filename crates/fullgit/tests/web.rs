@@ -44,6 +44,8 @@ fn start(dir: &Path) -> Server {
         .args(["web", "--no-open"])
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env_remove("SSH_AUTH_SOCK")
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
@@ -363,4 +365,47 @@ fn issues_and_pull_requests_in_the_browser() {
         show.contains("**Backoff?**") && show.contains("alice merged r1"),
         "{show}"
     );
+}
+
+/// With a passphrase on the key and no ssh-agent, the page asks for it,
+/// rather than the server's terminal.
+#[test]
+fn a_locked_key_is_unlocked_in_the_browser() {
+    let fx = Fixture::new();
+    let remote = fx.bare("remote.git");
+    let alice = user(&fx, &remote, "alice");
+    let key = fx.dir.path().join("id_alice");
+    let locked = Command::new("ssh-keygen")
+        .args(["-q", "-p", "-P", "", "-N", "s3cret", "-f"])
+        .arg(&key)
+        .status()
+        .unwrap();
+    assert!(locked.success());
+    let s = start(&alice);
+
+    let home = s.get("/").body;
+    assert!(
+        home.contains(r#"action="/unlock""#) && home.contains("needs its passphrase"),
+        "{home}"
+    );
+    let to = s.post("/issues/new", &[("back", "/issues/new"), ("title", "Hi")]);
+    assert!(to.contains("err=your%20key%20is%20locked"), "{to}");
+
+    let to = s.post("/unlock", &[("back", "/issues"), ("passphrase", "guess")]);
+    assert!(to.starts_with("/issues?err=wrong%20passphrase"), "{to}");
+    let to = s.post("/unlock", &[("back", "/issues"), ("passphrase", "s3cret")]);
+    assert!(to.starts_with("/issues?msg=Key%20unlocked"), "{to}");
+    let page = s.get("/issues").body;
+    assert!(
+        !page.contains(r#"action="/unlock""#) && page.contains(r#"action="/lock""#),
+        "{page}"
+    );
+
+    let to = s.post("/issues/new", &[("back", "/issues/new"), ("title", "Hi")]);
+    assert!(to.contains("msg=Opened"), "{to}");
+    // Signed with the key, so every clone accepts it.
+    assert!(fg_ok(&alice, &["issue", "list"]).contains("Hi"));
+
+    s.post("/lock", &[("back", "/")]);
+    assert!(s.get("/").body.contains(r#"action="/unlock""#));
 }

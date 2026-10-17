@@ -322,6 +322,23 @@ fn issues_and_pull_requests_in_the_browser() {
             .contains(r#"<span class="state merged">"#)
     );
 
+    // Labels come from the settings page.
+    assert!(s.get("/issues/new").body.contains("No labels yet"));
+    for l in ["docs", "bug"] {
+        let to = s.post("/settings/labels", &[("back", "/settings"), ("add", l)]);
+        assert!(to.starts_with("/settings?msg=Added"), "{to}");
+    }
+    let to = s.post(
+        "/settings/labels",
+        &[("back", "/settings"), ("add", "two words")],
+    );
+    assert!(to.contains("err="), "{to}");
+    let form = s.get("/issues/new").body;
+    assert!(
+        form.contains(r#"name="label" value="docs""#) && !form.contains(r#"name="labels""#),
+        "{form}"
+    );
+
     // An issue: opened, commented on and closed.
     let to = s.post(
         "/issues/new",
@@ -329,7 +346,7 @@ fn issues_and_pull_requests_in_the_browser() {
             ("back", "/issues/new"),
             ("title", "<b>Docs</b> are stale"),
             ("body", "See *README*"),
-            ("labels", "docs"),
+            ("label", "docs"),
         ],
     );
     let issue = to
@@ -346,6 +363,37 @@ fn issues_and_pull_requests_in_the_browser() {
         "{page}"
     );
     assert!(!page.contains("<b>Docs</b>"), "{page}");
+    assert!(
+        page.contains(r#"name="label" value="docs" checked"#)
+            && page.contains(r#"name="label" value="bug">"#),
+        "{page}"
+    );
+    s.post(
+        &format!("/issues/{issue}/labels"),
+        &[("back", "/"), ("label", "docs"), ("label", "bug")],
+    );
+    let to = s.post(
+        &format!("/issues/{issue}/labels"),
+        &[("back", "/"), ("label", "nope")],
+    );
+    assert!(to.contains("no%20label%20%22nope%22"), "{to}");
+    // Taken off the list, a label leaves its issues, and settings offers it back.
+    s.post(
+        "/settings/labels",
+        &[("back", "/settings"), ("remove", "bug")],
+    );
+    let page = s.get(&format!("/issues/{issue}")).body;
+    let labels = page.split("<h3>Labels</h3>").nth(1).unwrap();
+    let labels = labels.split("</section>").next().unwrap();
+    assert!(
+        labels.contains("label=docs") && !labels.contains("bug"),
+        "{labels}"
+    );
+    let settings = s.get("/settings").body;
+    assert!(
+        settings.contains("not listed") && settings.contains(r#"name="add" value="bug""#),
+        "{settings}"
+    );
     let to = s.post(
         &format!("/issues/{issue}/edit"),
         &[("back", "/"), ("title", "<b>Docs</b> are stale")],

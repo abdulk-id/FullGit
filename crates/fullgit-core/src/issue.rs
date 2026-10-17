@@ -9,6 +9,10 @@
 //! labels, assigns, closes and reopens. A comment is edited by its author
 //! only. Operations that change nothing (closing a closed issue, adding a
 //! label it has) are accepted: concurrent ones often overlap.
+//!
+//! With a policy, issues carry only the labels it lists: new ones are
+//! refused when written, and [`load`] sets aside those taken off the list
+//! since. Without a policy, any label goes.
 
 use std::collections::BTreeSet;
 
@@ -99,6 +103,9 @@ pub struct Issue {
     pub author: Option<Oid>,
     pub status: Status,
     pub labels: BTreeSet<String>,
+    /// Labels it carries that the policy no longer lists; [`load`] moves
+    /// them here from `labels`.
+    pub unlisted: BTreeSet<String>,
     pub assignees: BTreeSet<Oid>,
     pub comments: Vec<Comment>,
     pub timeline: Vec<Event>,
@@ -254,6 +261,29 @@ pub fn valid_label(l: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The labels issues may carry, or `None` without a policy, when any may.
+pub fn available(trust: &Trust) -> Option<&BTreeSet<String>> {
+    trust.policy.as_ref().map(|(_, p)| &p.labels)
+}
+
+/// Fails unless issues may carry each of `labels`.
+pub fn check_labels(trust: &Trust, labels: &[String]) -> Result<()> {
+    for l in labels {
+        valid_label(l).map_err(Error::Policy)?;
+        match available(trust) {
+            Some(listed) if !listed.contains(l) => {
+                let listed: Vec<_> = listed.iter().map(String::as_str).collect();
+                return Err(Error::Policy(match listed.is_empty() {
+                    true => format!("no label {l:?}: there are no labels yet"),
+                    false => format!("no label {l:?}; the labels are {}", listed.join(", ")),
+                }));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// A list of labels; absent means none.
 fn labels(p: &Value, key: &str) -> Result<Vec<String>, String> {
     strings(p, key)?
@@ -297,6 +327,7 @@ pub fn create(
     body: &str,
     labels: &[String],
 ) -> Result<Oid> {
+    check_labels(trust, labels)?;
     model::create::<Issue>(
         repo,
         trust,
@@ -367,6 +398,7 @@ pub fn label(
     add: &[String],
     remove: &[String],
 ) -> Result<Oid> {
+    check_labels(trust, add)?;
     model::update::<Issue>(
         repo,
         trust,
@@ -413,7 +445,15 @@ pub fn set_status(
 }
 
 pub fn load(repo: &Repository, trust: &Trust, id: Oid) -> Result<Loaded<Issue>> {
-    model::load::<Issue>(repo, trust, id)
+    let mut loaded = model::load::<Issue>(repo, trust, id)?;
+    if let Some(listed) = available(trust) {
+        let i = &mut loaded.model;
+        let (keep, unlisted) = std::mem::take(&mut i.labels)
+            .into_iter()
+            .partition(|l| listed.contains(l));
+        (i.labels, i.unlisted) = (keep, unlisted);
+    }
+    Ok(loaded)
 }
 
 /// Every local issue, or why it failed to load (e.g. its opening operation

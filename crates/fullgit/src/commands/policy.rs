@@ -1,4 +1,4 @@
-//! `fullgit policy`: roles and groups.
+//! `fullgit policy`: roles, groups, branch rules and labels.
 
 use anyhow::{Result, bail};
 use clap::Subcommand;
@@ -18,7 +18,7 @@ pub enum PolicyCmd {
         #[arg(long = "owner")]
         owners: Vec<String>,
     },
-    /// Show roles and groups.
+    /// Show roles, groups, branch rules and labels.
     Show,
     /// Give an identity a role: reader, contributor, maintainer or owner.
     Grant { who: String, role: Role },
@@ -44,6 +44,22 @@ pub enum PolicyCmd {
     },
     /// Remove a branch's merge rule.
     Unprotect { branch: String },
+    /// Manage the labels issues may carry. Maintainers may too.
+    #[command(subcommand)]
+    Label(LabelCmd),
+}
+
+#[derive(Subcommand)]
+pub enum LabelCmd {
+    Add {
+        #[arg(required = true)]
+        labels: Vec<String>,
+    },
+    /// Issues that carry a removed label stop showing it.
+    Remove {
+        #[arg(required = true)]
+        labels: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -101,6 +117,11 @@ pub fn run(repo: &Repository, cmd: PolicyCmd) -> Result<()> {
                     "branch {branch}: merging takes {} approval(s){from}",
                     rule.approvals
                 );
+            }
+            let labels: Vec<_> = policy.labels.iter().map(String::as_str).collect();
+            match labels.is_empty() {
+                true => println!("no labels"),
+                false => println!("labels: {}", labels.join(", ")),
             }
         }
         PolicyCmd::Grant { who, role } => {
@@ -169,6 +190,20 @@ pub fn run(repo: &Repository, cmd: PolicyCmd) -> Result<()> {
                     let id = resolve(repo, &trust, &who)?;
                     policy::group_remove(repo, &trust, &signer, &group, id)?;
                 }
+            }
+        }
+        PolicyCmd::Label(cmd) => {
+            let trust = Trust::load(repo)?;
+            let (signer, _) = me(repo, &trust)?;
+            let (labels, add) = match cmd {
+                LabelCmd::Add { labels } => (labels, true),
+                LabelCmd::Remove { labels } => (labels, false),
+            };
+            for l in &labels {
+                match add {
+                    true => policy::label_add(repo, &trust, &signer, l)?,
+                    false => policy::label_remove(repo, &trust, &signer, l)?,
+                };
             }
         }
     }

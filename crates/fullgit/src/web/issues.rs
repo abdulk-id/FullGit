@@ -55,7 +55,7 @@ fn row(ctx: &Ctx, id: Oid, i: &Issue) -> String {
     )
 }
 
-fn label(l: &str) -> String {
+pub fn label(l: &str) -> String {
     format!(
         r#"<a class="label" href="/issues?state=all&label={}">{}</a>"#,
         super::html::url_encode(l),
@@ -109,15 +109,16 @@ pub fn new_form(ctx: &Ctx, req: &Req) -> Result<Resp> {
         r#"<h1>New issue</h1><form class="stack" method="post" action="/issues/new">{}
 <input type="text" name="title" placeholder="Title" required autofocus>
 <textarea name="body" placeholder="Description (markdown)" rows="10"></textarea>
-<input type="text" name="labels" placeholder="Labels, separated by spaces or commas">
+{}
 <div class="actions"><button class="btn primary">Open issue</button></div></form>"#,
-        back("/issues/new")
+        back("/issues/new"),
+        label_picker(ctx, &BTreeSet::new()),
     );
     Ok(ctx.page(req, "New issue", body))
 }
 
 pub fn create(ctx: &Ctx, req: &Req) -> Result<Resp> {
-    let labels = split_labels(req.field("labels").unwrap_or_default())?;
+    let labels = chosen_labels(ctx, req)?;
     let id = issue::create(
         ctx.repo,
         &ctx.trust,
@@ -133,8 +134,40 @@ pub fn create(ctx: &Ctx, req: &Req) -> Result<Resp> {
     )))
 }
 
-fn split_labels(s: &str) -> Result<Vec<String>> {
-    let labels: Vec<String> = s
+/// Checkboxes for the labels the policy lists, `current` ticked. Without a
+/// policy any label goes, so it's a text field.
+fn label_picker(ctx: &Ctx, current: &BTreeSet<String>) -> String {
+    let Some(listed) = issue::available(&ctx.trust) else {
+        let current: Vec<&str> = current.iter().map(String::as_str).collect();
+        return format!(
+            r#"<input type="text" name="labels" value="{}" placeholder="Labels, separated by spaces or commas">"#,
+            esc(&current.join(" "))
+        );
+    };
+    if listed.is_empty() {
+        return r#"<p class="meta">No labels yet; maintainers add them in <a href="/settings">Settings</a>.</p>"#.into();
+    }
+    let mut s = String::from(r#"<div class="pick">"#);
+    for l in listed {
+        let checked = if current.contains(l) { " checked" } else { "" };
+        let _ = write!(
+            s,
+            r#"<label><input type="checkbox" name="label" value="{0}"{checked}> <span class="label">{0}</span></label>"#,
+            esc(l)
+        );
+    }
+    s.push_str("</div>");
+    s
+}
+
+/// The labels a form picked, from [`label_picker`].
+fn chosen_labels(ctx: &Ctx, req: &Req) -> Result<Vec<String>> {
+    if issue::available(&ctx.trust).is_some() {
+        return Ok(req.fields("label").into_iter().map(str::to_owned).collect());
+    }
+    let labels: Vec<String> = req
+        .field("labels")
+        .unwrap_or_default()
         .split(|c: char| c == ',' || c.is_whitespace())
         .filter(|l| !l.is_empty())
         .map(str::to_owned)
@@ -296,13 +329,15 @@ fn sidebar(ctx: &Ctx, b: &mut String, i: &Issue, here: &str, moderates: bool) {
     for l in &i.labels {
         b.push_str(&label(l));
     }
-    if moderates {
-        let current: Vec<&str> = i.labels.iter().map(String::as_str).collect();
+    let none_listed = issue::available(&ctx.trust).is_some_and(|l| l.is_empty());
+    if moderates && none_listed {
+        b.push_str(&label_picker(ctx, &i.labels));
+    } else if moderates {
         let _ = write!(
             b,
-            r#"<details><summary>Edit</summary><form class="stack" method="post" action="{here}/labels">{}<input type="text" name="labels" value="{}"><button class="btn">Save labels</button></form></details>"#,
+            r#"<details><summary>Edit</summary><form class="stack" method="post" action="{here}/labels">{}{}<button class="btn">Save labels</button></form></details>"#,
             back(here),
-            esc(&current.join(" "))
+            label_picker(ctx, &i.labels)
         );
     }
     b.push_str("</section><section><h3>Assignees</h3>");
@@ -420,9 +455,7 @@ pub fn act(ctx: &Ctx, req: &Req, id: Oid, action: &str) -> Result<Resp> {
             "Saved."
         }
         "labels" => {
-            let want: BTreeSet<String> = split_labels(req.field("labels").unwrap_or_default())?
-                .into_iter()
-                .collect();
+            let want: BTreeSet<String> = chosen_labels(ctx, req)?.into_iter().collect();
             let add: Vec<_> = want.difference(&current.labels).cloned().collect();
             let remove: Vec<_> = current.labels.difference(&want).cloned().collect();
             if add.is_empty() && remove.is_empty() {

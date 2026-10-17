@@ -38,6 +38,9 @@ fn roles_decide_who_may_do_what() {
     ] {
         policy::grant(&repo, &trust(&repo), &alice, id, role).unwrap();
     }
+    for l in ["bug", "p1"] {
+        policy::label_add(&repo, &trust(&repo), &alice, l).unwrap();
+    }
     let t = trust(&repo);
 
     // Readers neither open issues nor comment.
@@ -125,6 +128,70 @@ fn roles_decide_who_may_do_what() {
     let after = issue::load(&repo, &t, id).unwrap();
     assert_eq!(after.model, i);
     assert!(after.rejected.is_empty());
+}
+
+#[test]
+fn labels_come_from_the_policy() {
+    let fx = Fixture::new();
+    let (_, repo) = fx.repo("r");
+    let (alice, a) = person(&repo, &fx, "alice");
+    let (bob, b) = person(&repo, &fx, "bob");
+    let (erin, e) = person(&repo, &fx, "erin");
+    policy::genesis(&repo, &trust(&repo), &alice, &[a]).unwrap();
+    policy::grant(&repo, &trust(&repo), &alice, b, Role::Maintainer).unwrap();
+    policy::grant(&repo, &trust(&repo), &alice, e, Role::Contributor).unwrap();
+
+    // Maintainers manage the list; contributors don't.
+    assert!(rejected(policy::label_add(
+        &repo,
+        &trust(&repo),
+        &erin,
+        "bug"
+    )));
+    policy::label_add(&repo, &trust(&repo), &bob, "bug").unwrap();
+    policy::label_add(&repo, &trust(&repo), &alice, "docs").unwrap();
+    assert!(rejected(policy::label_add(
+        &repo,
+        &trust(&repo),
+        &bob,
+        "bug"
+    )));
+    assert!(rejected(policy::label_add(
+        &repo,
+        &trust(&repo),
+        &bob,
+        "two words"
+    )));
+    assert!(rejected(policy::label_remove(
+        &repo,
+        &trust(&repo),
+        &bob,
+        "p1"
+    )));
+
+    // Issues take only listed labels.
+    let t = trust(&repo);
+    let r = issue::create(&repo, &t, &erin, "x", "", &["p1".into()]);
+    assert!(
+        matches!(r, Err(Error::Policy(ref m)) if m.contains("bug, docs")),
+        "{r:?}"
+    );
+    let id = issue::create(&repo, &t, &erin, "Typo", "", &["bug".into()]).unwrap();
+    assert!(matches!(
+        issue::label(&repo, &t, &erin, id, &["p1".into()], &[]),
+        Err(Error::Policy(_))
+    ));
+    issue::label(&repo, &t, &erin, id, &["docs".into()], &["bug".into()]).unwrap();
+
+    // Taken off the list, a label stops showing; back on, it shows again.
+    policy::label_remove(&repo, &trust(&repo), &bob, "docs").unwrap();
+    let i = issue::load(&repo, &trust(&repo), id).unwrap().model;
+    assert!(i.labels.is_empty());
+    assert_eq!(i.unlisted.iter().collect::<Vec<_>>(), ["docs"]);
+    policy::label_add(&repo, &trust(&repo), &bob, "docs").unwrap();
+    let i = issue::load(&repo, &trust(&repo), id).unwrap().model;
+    assert_eq!(i.labels.iter().collect::<Vec<_>>(), ["docs"]);
+    assert!(i.unlisted.is_empty());
 }
 
 #[test]

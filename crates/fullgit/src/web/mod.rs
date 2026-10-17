@@ -18,6 +18,7 @@
 mod html;
 mod issues;
 mod prs;
+mod settings;
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -441,6 +442,8 @@ impl App {
             (false, ["prs", id]) => prs::show(&ctx, req, pr::resolve(&repo, id)?),
             (false, ["prs", id, "diff"]) => prs::diff(&ctx, req, pr::resolve(&repo, id)?),
             (true, ["prs", id, action]) => prs::act(&ctx, req, pr::resolve(&repo, id)?, action),
+            (false, ["settings"]) => settings::show(&ctx, req),
+            (true, ["settings", "labels"]) => settings::labels(&ctx, req),
             _ => bail!("no page {}", req.path),
         }
     }

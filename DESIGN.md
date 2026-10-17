@@ -152,8 +152,10 @@ Commit timestamps are informational only and never used for ordering.
 - Roles: `owner` > `maintainer` > `contributor` > `reader`. Groups are named
   sets of identities, e.g. `secrets:prod`.
 - Ops: `policy.grant {identity, role, keep?}`, `policy.revoke {identity,
-  keep}`, `policy.group_add {group, identity}`, `policy.group_remove`. Only
-  owners change the policy, and the last owner can't be removed.
+  keep}`, `policy.group_add {group, identity}`, `policy.group_remove`,
+  `policy.label_add {label}`, `policy.label_remove {label}`. Only owners
+  change the policy, except the labels, which maintainers manage too; the
+  last owner can't be removed.
 - An operation's **actor** is the identity holding its signing key, with that
   identity's role. Each entity type decides what role each op needs.
 - **Revocation.** There's no trusted clock, so a revoked key could otherwise
@@ -174,8 +176,9 @@ Commit timestamps are informational only and never used for ordering.
   after it is the recorded merge of a pull request. Pushes can't be
   prevented on a dumb host, only detected; use the host's branch protection
   alongside where it exists.
+- **Labels**: the policy lists the labels issues may carry (see Issues).
 - CLI: `fullgit policy init | show | grant | revoke | group add | group
-  remove | protect | unprotect`.
+  remove | protect | unprotect | label add | label remove`.
 
 ## Secrets
 
@@ -294,6 +297,12 @@ Commit timestamps are informational only and never used for ordering.
   maintainer edits, labels, assigns, closes and reopens. A comment is edited
   only by its author. Losing a role (a revoke) stops further operations;
   those the revoker had seen stay.
+- Labels come from a fixed list in the policy, kept by maintainers.
+  Clients refuse to add a label it doesn't list. Replay doesn't check
+  labels, since the list may have changed since; instead, loading an issue
+  sets aside labels the list no longer holds, so a removed label vanishes
+  from its issues (timelines still mention it) and returns if it is listed
+  again. Without a policy, any label goes.
 - Concurrency: operations that change nothing (closing a closed issue) are
   accepted, since concurrent ones overlap; replay order settles the rest,
   e.g. one clone adding a label another removed.
@@ -357,10 +366,13 @@ Commit timestamps are informational only and never used for ordering.
   at `127.0.0.1` (a free port by default) and opens the browser. Pages:
   an overview (open pull requests and issues, people, roles and branch
   rules), issue and pull request lists, an issue, a pull request's
-  conversation, and its changes per revision or between two revisions.
+  conversation, its changes per revision or between two revisions, and
+  settings, where maintainers manage the labels (with those still on
+  issues but no longer listed, to add back).
 - Everything the CLI does with issues and pull requests works there:
   opening, commenting (line comments from the diff, replies in threads),
-  reviewing, editing, labels and assignees, closing, merging. Sync is a
+  reviewing, editing, labels (picked from the list) and assignees,
+  closing, merging. Sync is a
   button. Revising stays on the command line, since it comes from a branch.
 - Server-rendered HTML; no JavaScript at all. Each GET only reads; each
   POST does one thing and redirects back with a message.

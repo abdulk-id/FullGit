@@ -93,3 +93,28 @@ fn issues_are_shared_discussed_and_closed() {
     let list = fg_ok(&alice, &["issue", "list", "--closed"]);
     assert!(list.contains("Sync loses ops"), "{list}");
 }
+
+#[test]
+fn labels_are_kept_in_the_policy() {
+    let fx = Fixture::new();
+    let remote = fx.bare("remote.git");
+    let alice = user(&fx, &remote, "alice");
+    fg_ok(&alice, &["policy", "init"]);
+    fg_ok(&alice, &["policy", "label", "add", "bug", "docs"]);
+    assert!(fg_ok(&alice, &["policy", "show"]).contains("labels: bug, docs"));
+
+    let out = fg(&alice, &["issue", "new", "-t", "x", "-l", "wontfix"]);
+    assert!(
+        !out.ok
+            && out
+                .stderr
+                .contains("no label \"wontfix\"; the labels are bug, docs"),
+        "{}",
+        out.stderr
+    );
+    let out = fg_ok(&alice, &["issue", "new", "-t", "Typo", "-l", "docs"]);
+    let id = out.split_whitespace().nth(2).unwrap().trim_end_matches(';');
+    fg_ok(&alice, &["policy", "label", "remove", "docs"]);
+    let show = fg_ok(&alice, &["issue", "show", id]);
+    assert!(!show.contains("labels:"), "{show}");
+}

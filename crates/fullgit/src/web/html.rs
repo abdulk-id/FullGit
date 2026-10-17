@@ -139,7 +139,7 @@ impl Page<'_> {
 <title>{title} · {repo}</title><style>{CSS}</style></head>
 <body><header><div class="bar">
 <a class="brand" href="/">fullgit</a><span class="repo">{repo}</span>
-<nav><a href="/issues">Issues</a><a href="/prs">Pull requests</a></nav>
+<nav><a href="/issues">Issues</a><a href="/prs">Pull requests</a><a href="/settings">Settings</a></nav>
 <span class="spacer"></span><span class="me">{me}</span>
 <form method="post" action="/sync">{back}<button class="btn">Sync</button></form>
 </div></header>
@@ -193,6 +193,9 @@ textarea{min-height:90px;resize:vertical}
 .dot.closed{background:var(--closed)}.dot.merged{background:var(--merged)}
 .empty{padding:30px;text-align:center;color:var(--muted)}
 .label{display:inline-block;padding:0 8px;border-radius:999px;border:1px solid var(--line);font-size:12px;margin-left:4px;background:var(--soft)}
+.pick label{display:inline-block;margin:0 10px 4px 0}
+table.labels{border-collapse:collapse;width:100%;margin-bottom:12px}table.labels td{padding:6px 10px;border-bottom:1px solid var(--line)}
+table.labels td:first-child{width:1%;white-space:nowrap;padding-right:24px}table.labels td:last-child{text-align:right}form.add{display:flex;gap:8px}form.add input{max-width:20em}
 .chip{font-size:12px;color:var(--muted);margin-left:6px}.chip.ok{color:var(--open)}.chip.bad{color:var(--closed)}
 .layout{display:grid;grid-template-columns:1fr 280px;gap:24px}@media (max-width:860px){.layout{grid-template-columns:1fr}}
 aside section{border-bottom:1px solid var(--line);padding-bottom:12px;margin-bottom:12px}

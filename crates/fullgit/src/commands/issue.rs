@@ -19,6 +19,7 @@ pub enum IssueCmd {
         /// The description.
         #[arg(long, short = 'm')]
         body: Option<String>,
+        /// A label the policy lists (`fullgit policy show`).
         #[arg(long = "label", short)]
         labels: Vec<String>,
     },
@@ -74,7 +75,8 @@ pub enum IssueCmd {
         #[arg(long, short = 'm')]
         comment: Option<String>,
     },
-    /// Add labels, or remove them with --remove.
+    /// Add labels the policy lists (`fullgit policy show`), or remove them
+    /// with --remove.
     Label {
         id: String,
         labels: Vec<String>,

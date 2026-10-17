@@ -1,5 +1,7 @@
-//! The policy: which identity holds which role, and named groups. Lives at
-//! `refs/fullgit/policy/<genesis-id>`. Only owners may change it.
+//! The policy: which identity holds which role, named groups, branch rules,
+//! and the labels issues may carry. Lives at
+//! `refs/fullgit/policy/<genesis-id>`. Only owners may change it, except
+//! the labels, which maintainers manage too.
 //!
 //! Which policy a clone trusts is pinned: `.fullgit/root` in the committed
 //! tree names the genesis, and `fullgit.root` in the clone's git config
@@ -10,7 +12,7 @@
 //! `policy.revoke {identity, keep}`, `policy.group_add {group, identity}`,
 //! `policy.group_remove {group, identity}`,
 //! `policy.protect {branch, approvals, group?, since?}` (0 approvals
-//! unprotects).
+//! unprotects), `policy.label_add {label}`, `policy.label_remove {label}`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -37,6 +39,8 @@ pub struct Policy {
     pub groups: BTreeMap<String, BTreeSet<Oid>>,
     /// Merge rules, per target branch.
     pub rules: BTreeMap<String, Rule>,
+    /// The labels issues may carry.
+    pub labels: BTreeSet<String>,
 }
 
 /// What merging a pull request into a branch takes.
@@ -190,15 +194,34 @@ impl Model for Policy {
                 self.groups.retain(|_, m| !m.is_empty());
                 Ok(())
             }
+            "policy.label_add" => {
+                let label = payload::str(p, "label")?;
+                crate::issue::valid_label(label)?;
+                if !self.labels.insert(label.to_owned()) {
+                    return Err(format!("{label} is already a label"));
+                }
+                Ok(())
+            }
+            "policy.label_remove" => {
+                let label = payload::str(p, "label")?;
+                if !self.labels.remove(label) {
+                    return Err(format!("{label} is not a label"));
+                }
+                Ok(())
+            }
             kind => Err(format!("unknown operation {kind}")),
         }
     }
 
-    /// Owners act on the policy. Re-checked against the final state, so an
-    /// owner's operations that their revocation didn't keep are dropped.
+    /// Owners act on the policy; maintainers also manage the labels.
+    /// Re-checked against the final state, so operations that a revocation
+    /// didn't keep are dropped.
     fn still_valid(&self, op: &StoredOp, ctx: &Ctx) -> Result<(), String> {
-        trust::actor(ctx.repo, &ctx.trust.identities, Some(self), ctx.entity, op)
-            .require(Role::Owner)
+        let role = match op.op.kind.as_str() {
+            "policy.label_add" | "policy.label_remove" => Role::Maintainer,
+            _ => Role::Owner,
+        };
+        trust::actor(ctx.repo, &ctx.trust.identities, Some(self), ctx.entity, op).require(role)
     }
 }
 
@@ -379,6 +402,39 @@ pub fn protect(
         signer,
         "policy.protect",
         json!({ "branch": branch, "approvals": approvals, "group": group, "since": since }),
+    )
+}
+
+/// Makes `label` available to issues.
+pub fn label_add(
+    repo: &Repository,
+    trust: &Trust,
+    signer: &dyn Signer,
+    label: &str,
+) -> Result<Oid> {
+    update(
+        repo,
+        trust,
+        signer,
+        "policy.label_add",
+        json!({ "label": label }),
+    )
+}
+
+/// Takes `label` off the list. Issues that carry it stop showing it, and
+/// show it again if it comes back.
+pub fn label_remove(
+    repo: &Repository,
+    trust: &Trust,
+    signer: &dyn Signer,
+    label: &str,
+) -> Result<Oid> {
+    update(
+        repo,
+        trust,
+        signer,
+        "policy.label_remove",
+        json!({ "label": label }),
     )
 }
 

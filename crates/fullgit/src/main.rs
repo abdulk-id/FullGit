@@ -1,4 +1,5 @@
 mod commands;
+mod web;
 
 use std::path::PathBuf;
 
@@ -54,6 +55,19 @@ enum Cmd {
     /// Pull requests and their review.
     #[command(subcommand)]
     Pr(commands::pr::PrCmd),
+    /// Browse and work on issues and pull requests in your browser. Serves
+    /// this clone on 127.0.0.1, to whoever has the URL it prints.
+    Web {
+        /// 0 picks a free port.
+        #[arg(long, default_value_t = 0)]
+        port: u16,
+        /// Don't open a browser.
+        #[arg(long)]
+        no_open: bool,
+        /// The remote that Sync and Merge use.
+        #[arg(long, default_value = "origin")]
+        remote: String,
+    },
     /// Check that every commit on a protected branch since it was
     /// protected was merged through a pull request. Uses this clone's copy:
     /// `git fetch` and `fullgit sync` first.
@@ -136,6 +150,21 @@ fn main() -> Result<()> {
         Cmd::Local(cmd) => commands::local::run(&repo, cmd)?,
         Cmd::Issue(cmd) => commands::issue::run(&repo, cmd)?,
         Cmd::Pr(cmd) => commands::pr::run(&repo, cmd)?,
+        Cmd::Web {
+            port,
+            no_open,
+            remote,
+        } => {
+            let path = repo.workdir().unwrap_or_else(|| repo.path()).to_owned();
+            web::serve(
+                &path,
+                web::Options {
+                    port,
+                    open: !no_open,
+                    remote,
+                },
+            )?;
+        }
         Cmd::Verify { branch, remote } => commands::pr::verify(&repo, branch, &remote)?,
         Cmd::Doctor => commands::doctor::run(&repo)?,
         Cmd::FilterProcess => commands::secret::filter_process(&repo)?,

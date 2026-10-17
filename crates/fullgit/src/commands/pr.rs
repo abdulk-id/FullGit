@@ -172,19 +172,7 @@ pub fn run(repo: &Repository, cmd: PrCmd) -> Result<()> {
                 Some(t) => t,
                 None => default_branch(repo, &remote)?,
             };
-            if source == target {
-                bail!("{source} is the target; switch to a branch, or pass --source");
-            }
-            let head = repo
-                .refname_to_id(&format!("refs/heads/{source}"))
-                .with_context(|| format!("no branch {source}"))?;
-            let base = repo
-                .merge_base(head, tip(repo, &remote, &target)?)
-                .with_context(|| format!("{source} and {target} share no history"))?;
-            let commits = count(repo, head, base)?;
-            if commits == 0 {
-                bail!("{source} has no commits that {target} doesn't");
-            }
+            let (head, base, commits) = range(repo, &remote, &source, &target)?;
             let (title, body) = match title {
                 Some(t) => (t, body.unwrap_or_default()),
                 None => {
@@ -473,12 +461,43 @@ pub fn run(repo: &Repository, cmd: PrCmd) -> Result<()> {
     Ok(())
 }
 
+/// What a new pull request from `source` into `target` would hold: its
+/// head, base, and how many commits lie between.
+pub(crate) fn range(
+    repo: &Repository,
+    remote: &str,
+    source: &str,
+    target: &str,
+) -> Result<(Oid, Oid, usize)> {
+    if source == target {
+        bail!("{source} is the target; pick another branch");
+    }
+    let head = repo
+        .refname_to_id(&format!("refs/heads/{source}"))
+        .with_context(|| format!("no branch {source}"))?;
+    let base = repo
+        .merge_base(head, tip(repo, remote, target)?)
+        .with_context(|| format!("{source} and {target} share no history"))?;
+    let commits = count(repo, head, base)?;
+    if commits == 0 {
+        bail!("{source} has no commits that {target} doesn't");
+    }
+    Ok((head, base, commits))
+}
+
 fn merge(repo: &Repository, id: &str, remote: &str) -> Result<()> {
+    let id = pr::resolve(repo, id)?;
+    println!("{}", merge_now(repo, id, remote)?);
+    Ok(())
+}
+
+/// Merges pull request `id` into its target on `remote` and records it.
+/// Returns what happened, for people.
+pub(crate) fn merge_now(repo: &Repository, id: Oid, remote: &str) -> Result<String> {
     // Decide on everyone's latest reviews, revisions and rules.
     sync::sync(repo, remote, Some(&signer(repo)?))?;
     let trust = Trust::load(repo)?;
     let (signer, me) = me(repo, &trust)?;
-    let id = pr::resolve(repo, id)?;
     let p = pr::load(repo, &trust, id)?.model;
     match p.status {
         Status::Open => {}
@@ -495,8 +514,9 @@ fn merge(repo: &Repository, id: &str, remote: &str) -> Result<()> {
     let (n, latest) = (p.revisions.len(), p.latest());
     have(repo, latest)?;
     let tip = pr::fetch_branch(repo, remote, &p.target)?;
+    let mut done = String::new();
     let commit = if tip == latest.head || repo.graph_descendant_of(tip, latest.head)? {
-        println!("{} already contains revision {n}", p.target);
+        done = format!("{} already contains revision {n}; ", p.target);
         tip
     } else {
         match pr::merge_commit(repo, tip, latest.head, &message(&trust, id, &p, &readiness))? {
@@ -522,13 +542,12 @@ fn merge(repo: &Repository, id: &str, remote: &str) -> Result<()> {
     };
     pr::record_merge(repo, &trust, &signer, id, latest.id, commit)?;
     sync::sync(repo, remote, Some(&signer))?;
-    println!(
-        "merged pull request {} into {} as {}; `git pull` brings it here",
+    Ok(format!(
+        "{done}merged pull request {} into {} as {}; `git pull` brings it here",
         short_id(id),
         p.target,
         short(commit)
-    );
-    Ok(())
+    ))
 }
 
 /// `fullgit verify`.
@@ -702,7 +721,7 @@ fn show(repo: &Repository, trust: &Trust, id: Oid, p: &Pr) {
 
 /// E.g. `not ready to merge: 0 of 1 approvals from reviewers; changes
 /// requested by carol`.
-fn describe(trust: &Trust, r: &Readiness) -> String {
+pub(crate) fn describe(trust: &Trust, r: &Readiness) -> String {
     let mut parts = Vec::new();
     match &r.rule {
         Some(rule) => {
@@ -729,7 +748,7 @@ fn describe(trust: &Trust, r: &Readiness) -> String {
     format!("{state} to merge: {}", parts.join("; "))
 }
 
-fn names<'a>(trust: &Trust, ids: impl Iterator<Item = &'a Oid>) -> String {
+pub(crate) fn names<'a>(trust: &Trust, ids: impl Iterator<Item = &'a Oid>) -> String {
     ids.map(|id| who(trust, Some(*id)))
         .collect::<Vec<_>>()
         .join(", ")
@@ -747,7 +766,12 @@ fn context(repo: &Repository, p: &Pr, l: &Location) {
     }
 }
 
-fn file_lines(repo: &Repository, r: &Revision, path: &str, side: Side) -> Result<Vec<String>> {
+pub(crate) fn file_lines(
+    repo: &Repository,
+    r: &Revision,
+    path: &str,
+    side: Side,
+) -> Result<Vec<String>> {
     let commit = match side {
         Side::Old => r.base,
         Side::New => r.head,
@@ -783,7 +807,7 @@ fn find_comment<'a>(p: &'a Pr, prefix: &str) -> Result<&'a pr::Comment> {
 }
 
 /// Commits in `base..head`.
-fn count(repo: &Repository, head: Oid, base: Oid) -> Result<usize> {
+pub(crate) fn count(repo: &Repository, head: Oid, base: Oid) -> Result<usize> {
     let mut walk = repo.revwalk()?;
     walk.push(head)?;
     walk.hide(base)?;
@@ -797,7 +821,7 @@ fn have(repo: &Repository, r: &Revision) -> Result<()> {
     Ok(())
 }
 
-fn current_branch(repo: &Repository) -> Option<String> {
+pub(crate) fn current_branch(repo: &Repository) -> Option<String> {
     let head = repo.head().ok()?;
     if !head.is_branch() {
         return None;
@@ -806,7 +830,7 @@ fn current_branch(repo: &Repository) -> Option<String> {
 }
 
 /// The branch `refs/remotes/<remote>/HEAD` names.
-fn default_branch(repo: &Repository, remote: &str) -> Result<String> {
+pub(crate) fn default_branch(repo: &Repository, remote: &str) -> Result<String> {
     let prefix = format!("refs/remotes/{remote}/");
     repo.find_reference(&format!("{prefix}HEAD"))
         .ok()

@@ -1,6 +1,6 @@
 # FullGit — design
 
-Status: **draft, Phase 7**.
+Status: **draft, Phase 8**.
 
 ## Goals
 
@@ -348,6 +348,33 @@ Commit timestamps are informational only and never used for ordering.
   if the branch was rebased). Nothing but `pr merge` touches the remote
   until `fullgit sync`.
 
+## Web UI
+
+- `fullgit web [--port N] [--no-open] [--remote origin]` serves the clone
+  at `127.0.0.1` (a free port by default) and opens the browser. Pages:
+  an overview (open pull requests and issues, people, roles and branch
+  rules), issue and pull request lists, an issue, a pull request's
+  conversation, and its changes per revision or between two revisions.
+- Everything the CLI does with issues and pull requests works there:
+  opening, commenting (line comments from the diff, replies in threads),
+  reviewing, editing, labels and assignees, closing, merging. Sync is a
+  button. Revising stays on the command line, since it comes from a branch.
+- Server-rendered HTML; no JavaScript at all. Each GET only reads; each
+  POST does one thing and redirects back with a message.
+- Access: the server prints a URL holding a random token. Visiting it sets
+  an `HttpOnly`, `SameSite=Strict` cookie named for the port; every other
+  request needs that cookie. The `Host` header must be the served address
+  (against DNS rebinding), and a POST's `Origin`, when present, must be the
+  server itself (against forged forms). The content security policy
+  forbids scripts and framing.
+- What users wrote is escaped; markdown is rendered with raw HTML shown as
+  text, and links keep only http(s), mailto and relative targets. Remote
+  https images do load.
+- Secrets in a diff show as "encrypted secret", not as armored text.
+- Requests are handled one at a time, and signing runs `ssh-keygen`: a
+  passphrase-protected key needs `ssh-agent`, or the request waits for the
+  passphrase on the server's terminal.
+
 ## Implementation
 
 - Rust workspace:
@@ -372,7 +399,9 @@ Commit timestamps are informational only and never used for ordering.
 | 4. Per-user files | `local add/save/restore`, hooks | done (2026-10-17) |
 | 5. Issues | CLI: create, list, show, comment, close | done (2026-10-17) |
 | 6. PRs + review | Revisions, line comments, approvals, merge | done (2026-10-17) |
-| 7. UX + reach | TUI or local web UI, GitHub/GitLab bridge, server hook | |
+| 7. Web UI | `fullgit web`: browse, discuss, review, merge | done (2026-10-17) |
+| 8. GitHub bridge | Import and mirror GitHub issues and pull requests | |
+| 9. Reach | Server hook rejecting invalid operations; GitLab later | |
 
 ## Open questions
 

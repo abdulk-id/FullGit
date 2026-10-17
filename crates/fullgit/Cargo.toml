@@ -15,6 +15,9 @@ clap.workspace = true
 git2.workspace = true
 serde_json.workspace = true
 ssh-key.workspace = true
+tiny_http = { version = "0.12.0", default-features = false }
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+getrandom = "0.3"
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "type": "issue.create",
+  "lamport": 1,
+  "payload": {
+    "body": "Issues can be tested using this issue",
+    "labels": [
+      "testing"
+    ],
+    "nonce": "18df633d9c4e1701125230",
+    "title": "Test FullGit Issue functionality"
+  }
+}

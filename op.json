@@ -1,8 +1,8 @@
 {
   "v": 1,
-  "type": "issue.comment",
-  "lamport": 2,
+  "type": "issue.status",
+  "lamport": 3,
   "payload": {
-    "body": "Fixed in a4e2c9e"
+    "status": "closed"
   }
 }

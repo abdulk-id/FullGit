@@ -31,8 +31,8 @@ git remote add origin "$url"
 id=$("$fullgit" debug append "$ref" issue.create --payload '{"title":"host check"}')
 echo "    $id"
 
-echo "==> pushing refs/fullgit/*"
-"$fullgit" push origin
+echo "==> syncing refs/fullgit/*"
+"$fullgit" sync origin
 
 echo "==> listing remote refs"
 git ls-remote origin 'refs/fullgit/*'

@@ -1,6 +1,6 @@
 # FullGit — design
 
-Status: **draft, Phase 1**.
+Status: **draft, Phase 2**.
 
 ## Goals
 
@@ -67,9 +67,16 @@ Commit timestamps are informational only and never used for ordering.
 - `lamport = 1 + max(lamport of parents)` (root is `1`).
 - Replay order is a topological order of the operation DAG, ties broken by
   `(lamport, commit oid)`. Every machine computes the same order.
-- Each entity type defines `apply(state, op)`. Concurrent writes resolve through
-  that order: last-writer-wins for scalar fields, set semantics for labels and
-  assignees, append for comments.
+- Each entity type implements the `Model` trait: `apply(&mut state, op)`.
+  Concurrent writes resolve through that order: last-writer-wins for scalar
+  fields, set semantics for labels and assignees, append for comments.
+- An op the model rejects (unknown type, bad payload, and from Phase 2 a
+  missing permission) is skipped and listed as rejected. Every replica skips
+  the same ops. A rejected root makes the whole entity invalid.
+- `model::update` applies an op to the current state before moving the ref,
+  so a client never writes an op it would itself reject.
+- Root ops get a `nonce` in their payload; otherwise two identical creations
+  in the same second would be the same commit, and so the same entity.
 
 ### Sync
 
@@ -78,11 +85,22 @@ Commit timestamps are informational only and never used for ordering.
   add a push refspec: setting `remote.<name>.push` changes what a bare
   `git push` pushes.
 - `fullgit sync [<remote>]`: fetch, then for each entity:
+  - verify the remote's version first: every op validly signed, consistent
+    clocks, a single root, and for `<namespace>/<id>` refs, root = `<id>`;
   - remote head descends from local → fast-forward;
   - local descends from remote → nothing to do;
-  - diverged → write a signed `merge` operation with both heads as parents.
+  - diverged → write a signed `merge` operation with both heads as parents
+    (sorted). This is the only step that needs a signing key; without one,
+    the entity is skipped until there is one.
 
-  Then push `refs/fullgit/*:refs/fullgit/*`.
+  Then push every local `refs/fullgit/*` ref without forcing. If another
+  writer won the race, fetch, merge and push again (up to 3 rounds).
+- Refs whose remote version fails verification are **neither merged nor
+  pushed**, and are reported. Sync doesn't overwrite them: a client on an
+  older version would see ops in a newer format as invalid and destroy them.
+  Repairing a bad remote ref is a deliberate human action.
+- Deleting an entity ref on the remote doesn't delete it anywhere else: the
+  next sync from any clone pushes it back.
 - Network operations shell out to the system `git`, so the user's SSH and
   credential setup works unchanged.
 
@@ -200,7 +218,7 @@ Commit timestamps are informational only and never used for ordering.
 | Phase | Deliverable | Status |
 |---|---|---|
 | 0. Spike | Signed operation commits under `refs/fullgit/*`; verified by `git verify-commit`; survive push/fetch to a local bare repo; script to check real hosts | done; GitHub passes (2026-10-17), GitLab untested |
-| 1. Engine | Entity library, deterministic replay, `sync` | |
+| 1. Engine | Entity library, deterministic replay, `sync` | done (2026-10-17) |
 | 2. Identity + policy | `init`, `id`, roles, validation, revocation | |
 | 3. Secrets | Filter driver, age, guards, `rekey` | |
 | 4. Per-user files | `local add/save/restore`, hooks | |
@@ -213,8 +231,8 @@ Commit timestamps are informational only and never used for ordering.
 - Revocation semantics (see Permissions).
 - Contributors without push access (forks): how their operations reach the repo.
 - Hosts: GitHub accepts, lists and serves `refs/fullgit/*` (checked
-  2026-10-17; a test ref was left in a private throwaway repo to check later
-  that it isn't garbage-collected). GitLab and Bitbucket are untested.
+  2026-10-17; a test ref left in a private throwaway repo was still there 5
+  hours later; check again for garbage collection over a longer period). GitLab and Bitbucket are untested.
   `scripts/check-remote.sh` runs the check.
 - Scaling: thousands of entity refs make fetches slower. Entities may need
   packing into fewer refs later.

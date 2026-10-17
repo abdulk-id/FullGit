@@ -29,27 +29,56 @@ pub fn append(
     Ok(id)
 }
 
-/// Joins a diverged head (e.g. from a remote) into the entity at `refname`
-/// with a signed `merge` operation. Fast-forwards instead when possible.
-pub fn merge(repo: &Repository, refname: &str, signer: &dyn Signer, other: Oid) -> Result<Oid> {
+/// What [`merge`] did. Each variant carries the ref's new head.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Merged {
+    /// The ref didn't exist and now points at the other head.
+    Created(Oid),
+    /// The ref already contained the other head.
+    UpToDate(Oid),
+    FastForwarded(Oid),
+    /// A signed `merge` operation joins the two heads.
+    Merged(Oid),
+}
+
+impl Merged {
+    pub fn head(self) -> Oid {
+        match self {
+            Self::Created(id) | Self::UpToDate(id) | Self::FastForwarded(id) | Self::Merged(id) => {
+                id
+            }
+        }
+    }
+}
+
+/// Joins `other` (e.g. a remote's head) into the entity at `refname`,
+/// fast-forwarding when possible. Only a real merge needs `signer`; without
+/// one, diverged heads fail with [`Error::NeedsSigner`].
+pub fn merge(
+    repo: &Repository,
+    refname: &str,
+    signer: Option<&dyn Signer>,
+    other: Oid,
+) -> Result<Merged> {
     let refname = refs::qualify(refname);
     let Some(local) = head_of(repo, &refname)? else {
-        update_ref(repo, &refname, other, None, "fast-forward")?;
-        return Ok(other);
+        update_ref(repo, &refname, other, None, "create")?;
+        return Ok(Merged::Created(other));
     };
     if local == other || repo.graph_descendant_of(local, other)? {
-        return Ok(local);
+        return Ok(Merged::UpToDate(local));
     }
     if repo.graph_descendant_of(other, local)? {
         update_ref(repo, &refname, other, Some(local), "fast-forward")?;
-        return Ok(other);
+        return Ok(Merged::FastForwarded(other));
     }
+    let signer = signer.ok_or_else(|| Error::NeedsSigner(refname.clone()))?;
     // Sorted parents keep the merge commit independent of who performs it.
     let mut parents = [local, other];
     parents.sort();
     let id = write_op(repo, signer, &parents, MERGE_KIND, serde_json::Value::Null)?;
     update_ref(repo, &refname, id, Some(local), MERGE_KIND)?;
-    Ok(id)
+    Ok(Merged::Merged(id))
 }
 
 /// Loads every operation reachable from `heads` in replay order. Every

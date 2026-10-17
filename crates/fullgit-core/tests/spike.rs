@@ -1,69 +1,12 @@
 //! Phase 0: signed operation commits, deterministic replay, and transport
 //! through a plain git remote. Uses the system `git` and `ssh-keygen`.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+mod common;
 
-use fullgit_core::{Error, Signer, SshKeygenSigner, entity, load, op, refs, remote};
+use common::{Fixture, git};
+use fullgit_core::{Error, Signer, entity, load, op, refs, remote};
 use git2::{Oid, Repository};
 use serde_json::json;
-use tempfile::TempDir;
-
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .expect("git runs");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8(out.stdout).unwrap()
-}
-
-struct Fixture {
-    dir: TempDir,
-    key: PathBuf,
-}
-
-impl Fixture {
-    fn new() -> Self {
-        let dir = TempDir::new().unwrap();
-        let key = dir.path().join("id_ed25519");
-        let status = Command::new("ssh-keygen")
-            .args([
-                "-q",
-                "-t",
-                "ed25519",
-                "-N",
-                "",
-                "-C",
-                "test@example.com",
-                "-f",
-            ])
-            .arg(&key)
-            .status()
-            .unwrap();
-        assert!(status.success());
-        Self { dir, key }
-    }
-
-    fn repo(&self, name: &str) -> (PathBuf, Repository) {
-        let path = self.dir.path().join(name);
-        git(self.dir.path(), &["init", "-q", path.to_str().unwrap()]);
-        git(&path, &["config", "user.name", "Test"]);
-        git(&path, &["config", "user.email", "test@example.com"]);
-        let repo = Repository::open(&path).unwrap();
-        (path, repo)
-    }
-
-    fn signer(&self) -> SshKeygenSigner {
-        SshKeygenSigner::new(&self.key).unwrap()
-    }
-}
 
 #[test]
 fn ops_roundtrip_in_order_with_verified_signer() {
@@ -204,14 +147,21 @@ fn concurrent_ops_replay_deterministically() {
 
     // Merging the second writer's head joins both branches.
     git2::Repository::reference(&repo, "refs/fullgit/issues/t", a, true, "test").unwrap();
-    let m = entity::merge(&repo, "issues/t", &signer, b).unwrap();
+    let m = entity::merge(&repo, "issues/t", Some(&signer), b)
+        .unwrap()
+        .head();
     let merged = load(&repo, &[m]).unwrap();
     assert_eq!(merged.len(), 4);
     assert_eq!(merged.last().unwrap().op.kind, entity::MERGE_KIND);
     assert_eq!(merged.last().unwrap().op.lamport, 3);
 
     // Merging something already included is a no-op.
-    assert_eq!(entity::merge(&repo, "issues/t", &signer, a).unwrap(), m);
+    assert_eq!(
+        entity::merge(&repo, "issues/t", Some(&signer), a)
+            .unwrap()
+            .head(),
+        m
+    );
 }
 
 #[test]

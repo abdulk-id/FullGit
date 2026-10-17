@@ -1,8 +1,7 @@
-use std::process::Command;
-
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use fullgit_core::{SshKeygenSigner, refs, remote};
+use fullgit_core::sync::{self, Outcome};
+use fullgit_core::{Signer, SshKeygenSigner, refs, remote};
 use git2::Repository;
 
 #[derive(Parser)]
@@ -23,8 +22,8 @@ enum Cmd {
         #[arg(default_value = "origin")]
         remote: String,
     },
-    /// Push all refs/fullgit/* to a remote.
-    Push {
+    /// Fetch, merge and push all refs/fullgit/* with a remote.
+    Sync {
         #[arg(default_value = "origin")]
         remote: String,
     },
@@ -60,14 +59,21 @@ fn main() -> Result<()> {
                 println!("{remote} already fetches refs/fullgit/*");
             }
         }
-        Cmd::Push { remote } => {
-            let status = Command::new("git")
-                .args(["push", &remote, refs::PUSH_REFSPEC])
-                .status()
-                .context("running git push")?;
-            if !status.success() {
-                bail!("git push failed");
+        Cmd::Sync { remote } => {
+            // Without a key we can still fetch, fast-forward and push.
+            let signer = SshKeygenSigner::from_git_config(&repo).ok();
+            let report = sync::sync(&repo, &remote, signer.as_ref().map(|s| s as &dyn Signer))?;
+            for (refname, outcome) in &report.refs {
+                let name = refname.strip_prefix(refs::PREFIX).unwrap_or(refname);
+                match outcome {
+                    Outcome::UpToDate => {}
+                    Outcome::New => println!("new           {name}"),
+                    Outcome::FastForwarded => println!("updated       {name}"),
+                    Outcome::Merged => println!("merged        {name}"),
+                    Outcome::Rejected(why) => eprintln!("warning: skipped {name}: {why}"),
+                }
             }
+            println!("synced with {remote}");
         }
         Cmd::Debug(DebugCmd::Append {
             refname,

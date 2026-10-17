@@ -12,6 +12,7 @@ rpassword.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 ssh-key.workspace = true
+tempfile.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

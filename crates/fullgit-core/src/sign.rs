@@ -1,6 +1,5 @@
 //! SSH signatures in the format git uses for `gpg.format=ssh` commit signing.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -77,22 +76,34 @@ impl Signer for SshKeygenSigner {
     }
 
     fn sign_as(&self, namespace: &str, data: &[u8]) -> Result<String> {
-        let mut child = Command::new("ssh-keygen")
+        // Like git: sign a file, and leave stdin alone, so ssh-keygen can ask
+        // for a passphrase on the terminal.
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("data");
+        std::fs::write(&file, data)?;
+        let out = Command::new("ssh-keygen")
             .args(["-q", "-Y", "sign", "-n", namespace, "-f"])
             .arg(&self.key_path)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
+            .arg(&file)
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::null())
             .stderr(Stdio::piped())
-            .spawn()?;
-        child.stdin.take().expect("piped stdin").write_all(data)?;
-        let out = child.wait_with_output()?;
+            .spawn()?
+            .wait_with_output()?;
         if !out.status.success() {
-            return Err(Error::Signature(format!(
-                "ssh-keygen -Y sign failed: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            )));
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let mut msg = format!("ssh-keygen -Y sign failed: {}", stderr.trim());
+            if stderr.contains("passphrase") || stderr.contains("askpass") {
+                msg.push_str(
+                    "\nthe key needs its passphrase, and there was no terminal to ask on; \
+                     load it into ssh-agent with `ssh-add`",
+                );
+            }
+            return Err(Error::Signature(msg));
         }
-        String::from_utf8(out.stdout).map_err(|e| Error::Signature(e.to_string()))
+        let mut sig = file.into_os_string();
+        sig.push(".sig");
+        Ok(std::fs::read_to_string(sig)?)
     }
 }
 

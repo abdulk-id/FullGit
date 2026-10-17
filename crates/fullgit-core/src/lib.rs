@@ -2,6 +2,7 @@
 //! `refs/fullgit/*`. See `DESIGN.md` at the repository root.
 
 pub mod entity;
+pub mod filter;
 pub mod identity;
 pub mod model;
 pub mod op;
@@ -9,6 +10,8 @@ pub mod payload;
 pub mod policy;
 pub mod refs;
 pub mod remote;
+pub mod secret;
+pub mod setup;
 pub mod sign;
 pub mod sync;
 pub mod trust;

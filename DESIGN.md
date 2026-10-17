@@ -1,6 +1,6 @@
 # FullGit — design
 
-Status: **draft, Phase 3**.
+Status: **draft, Phase 4**.
 
 ## Goals
 
@@ -171,27 +171,62 @@ Commit timestamps are informational only and never used for ordering.
 - Declared in `.gitattributes`, so git does the pattern matching:
 
   ```
-  .env       filter=fullgit diff=fullgit fullgit-group=dev
-  .env.prod  filter=fullgit diff=fullgit fullgit-group=secrets:prod
+  /.env       filter=fullgit diff=fullgit -merge -text fullgit-group=dev
+  /.env.prod  filter=fullgit diff=fullgit -merge -text fullgit-group=secrets:prod
   ```
 
-  `fullgit secret add <path> --group <g>` writes these lines.
-- Encrypted with **age** to every SSH key of every member of the group.
-  Plaintext in the working tree, ciphertext in the repository.
-- Implemented as a git filter driver using the long-running
-  `filter.<driver>.process` protocol.
-- age output is non-deterministic, so the clean filter reuses the blob already
-  in the index when the plaintext is unchanged. Otherwise every `git status`
-  would report changes.
+  `fullgit secret add <path> --group <g>` writes these lines. `-merge`
+  makes git treat a conflict as binary rather than writing conflict
+  markers into ciphertext; `-text` keeps line-ending conversion away from
+  it.
+- **Sealed format**: a short header, the age ciphertext (armored), and an SSH
+  signature over both by whoever sealed it:
+
+  ```
+  fullgit-secret v1
+  group: dev
+  recipient: SHA256:...            (one per key, sorted)
+  -----BEGIN AGE ENCRYPTED FILE-----
+  ...
+  -----BEGIN SSH SIGNATURE-----    (namespace fullgit-secret)
+  ...
+  ```
+
+  Encrypted with **age** to every current key of every member of the
+  group. age doesn't authenticate senders, and the group's public keys are
+  public, so anyone with push access could otherwise replace a secret with
+  their own. A sealed file is therefore only opened if its signer is a
+  member of the group or an owner, and a clone refuses to seal for a
+  group its user may not write.
+- Implemented as a git filter using the long-running
+  `filter.fullgit.process` protocol (one process per git command), with
+  `filter.fullgit.required=true`: if sealing fails, `git add` fails rather
+  than storing plaintext.
+  - **clean** seals. age output is randomized, so if the plaintext matches
+    what the index holds, the index blob is returned unchanged; otherwise
+    every `git status` would report changes.
+  - **smudge** verifies and decrypts. When it can't (not a recipient, no
+    key, untrusted signer, policy not synced yet) it checks out the sealed
+    file unchanged and says why; it never fails a checkout.
+    `fullgit secret checkout` retries once that is fixed.
 - A `diff=fullgit` textconv driver gives plaintext diffs locally.
-- Without the keys, checkout leaves the ciphertext in place instead of failing.
-- Guards: a `pre-commit` hook refuses any staged secret whose blob is not valid
-  fullgit ciphertext (this catches a misconfigured filter). `fullgit doctor`
-  checks the setup.
-- `fullgit secret rekey` re-encrypts to the current recipients after a
-  membership change. It lists every secret the removed member could read,
-  because git history still holds the old versions and those must be
-  **rotated**.
+- Decryption needs the private key file: ssh-agent can sign but not
+  decrypt. It is `fullgit.identityFile`, else `user.signingkey` without
+  `.pub`. Passphrase-protected keys are unlocked once per git command.
+- Guards, installed by `fullgit init`: a `pre-commit` hook refuses staged
+  secrets that aren't sealed (e.g. added while the filter wasn't set up),
+  and a `pre-push` hook refuses commits that hold one, which catches
+  `--no-verify`. `fullgit doctor` checks the whole setup.
+- `fullgit secret rekey` reseals, in the index, secrets whose recipients
+  differ from their group's current keys. It names everyone who could read
+  the previous version, because git history still holds it: those values
+  must be **rotated**.
+- `fullgit secret list` shows each secret's group and whether it is sealed,
+  trusted, current and readable by you.
+- Limits: a clone without fullgit set up (no filter, no hooks) can still
+  commit plaintext; only a server-side check catches that (Phase 7). The
+  signature doesn't cover the path, so one secret of a group can be swapped
+  for another of the same group.
 
 ## Per-user files
 
@@ -251,7 +286,7 @@ Commit timestamps are informational only and never used for ordering.
 | 0. Spike | Signed operation commits under `refs/fullgit/*`; verified by `git verify-commit`; survive push/fetch to a local bare repo; script to check real hosts | done; GitHub passes (2026-10-17), GitLab untested |
 | 1. Engine | Entity library, deterministic replay, `sync` | done (2026-10-17) |
 | 2. Identity + policy | `init`, `id`, roles, validation, revocation | done (2026-10-17) |
-| 3. Secrets | Filter driver, age, guards, `rekey` | |
+| 3. Secrets | Filter driver, age, guards, `rekey` | done (2026-10-17) |
 | 4. Per-user files | `local add/save/restore`, hooks | |
 | 5. Issues | CLI: create, list, show, comment, close | |
 | 6. PRs + review | Revisions, line comments, approvals, merge | |

@@ -52,6 +52,8 @@ pub fn git(dir: &Path, args: &[&str]) -> String {
         .arg("-C")
         .arg(dir)
         .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .output()
         .expect("git runs");
     assert!(
@@ -127,7 +129,7 @@ fn configure(path: &Path) {
     git(path, &["config", "user.email", "test@example.com"]);
 }
 
-fn keygen(dir: &Path, name: &str) -> PathBuf {
+pub fn keygen(dir: &Path, name: &str) -> PathBuf {
     let key = dir.join(format!("id_{name}"));
     let status = Command::new("ssh-keygen")
         .args([

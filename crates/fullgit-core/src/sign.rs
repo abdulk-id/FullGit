@@ -116,7 +116,7 @@ pub fn fingerprint(key: &KeyData) -> String {
     key.fingerprint(Default::default()).to_string()
 }
 
-fn expand_home(path: &Path) -> PathBuf {
+pub fn expand_home(path: &Path) -> PathBuf {
     match (path.strip_prefix("~"), std::env::var_os("HOME")) {
         (Ok(rest), Some(home)) => PathBuf::from(home).join(rest),
         _ => path.to_owned(),

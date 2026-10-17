@@ -5,7 +5,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+age.workspace = true
 git2.workspace = true
+rpassword.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 ssh-key.workspace = true

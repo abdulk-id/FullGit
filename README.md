@@ -40,7 +40,18 @@ From a clone of this repository:
 cargo install --path crates/fullgit --locked
 ```
 
-To also run it as `git fullgit`, link it under that name:
+On Arch Linux, build a package from `master` instead; it installs both
+`fullgit` and `git fullgit`:
+
+```sh
+cd packaging/arch
+makepkg -si
+```
+
+(It needs `cargo` from pacman, via `rust` or `rustup`. If your Rust comes from
+elsewhere, e.g. mise, run `makepkg -si --nodeps`.)
+
+Otherwise, to also run it as `git fullgit`, link it under that name:
 
 ```sh
 ln -s "$(command -v fullgit)" "$(dirname "$(command -v fullgit)")/git-fullgit"

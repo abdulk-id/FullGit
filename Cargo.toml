@@ -7,7 +7,7 @@ version = "0.0.1"
 edition = "2024"
 # let-chains
 rust-version = "1.88"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 
 [workspace.dependencies]
 fullgit-core = { path = "crates/fullgit-core" }

@@ -1,0 +1,22 @@
+pkgbase = fullgit-git
+	pkgdesc = Issues, pull requests, permissions, secrets and per-user files that travel with your git repository
+	pkgver = r11.f6d7fb5
+	pkgrel = 1
+	url = https://github.com/abdulk-id/FullGit
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	makedepends = cargo
+	makedepends = git
+	depends = git
+	depends = glibc
+	depends = libgcc
+	depends = openssh
+	depends = zlib
+	provides = fullgit
+	conflicts = fullgit
+	options = !lto
+	source = git+https://github.com/abdulk-id/FullGit.git
+	sha256sums = SKIP
+
+pkgname = fullgit-git

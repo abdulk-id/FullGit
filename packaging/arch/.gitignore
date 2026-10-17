@@ -1,0 +1,6 @@
+# makepkg output
+/src/
+/pkg/
+/FullGit/
+*.pkg.tar.*
+*.log

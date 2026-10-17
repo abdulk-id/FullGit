@@ -16,7 +16,12 @@ pub const NAMESPACE: &str = "git";
 pub trait Signer {
     fn public_key(&self) -> &PublicKey;
     /// Returns an armored `-----BEGIN SSH SIGNATURE-----` block over `data`.
-    fn sign(&self, data: &[u8]) -> Result<String>;
+    fn sign_as(&self, namespace: &str, data: &[u8]) -> Result<String>;
+
+    /// Signs in git's namespace, as for a commit.
+    fn sign(&self, data: &[u8]) -> Result<String> {
+        self.sign_as(NAMESPACE, data)
+    }
 }
 
 /// Signs by running `ssh-keygen -Y sign`, as git does. Pointing `key_path` at
@@ -59,9 +64,9 @@ impl Signer for SshKeygenSigner {
         &self.public_key
     }
 
-    fn sign(&self, data: &[u8]) -> Result<String> {
+    fn sign_as(&self, namespace: &str, data: &[u8]) -> Result<String> {
         let mut child = Command::new("ssh-keygen")
-            .args(["-q", "-Y", "sign", "-n", NAMESPACE, "-f"])
+            .args(["-q", "-Y", "sign", "-n", namespace, "-f"])
             .arg(&self.key_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -82,12 +87,33 @@ impl Signer for SshKeygenSigner {
 /// Verifies an armored SSH signature over `data` and returns the signing key.
 /// Says nothing about whether that key is *trusted*; that is the policy's job.
 pub fn verify(data: &[u8], armored: &str) -> Result<KeyData> {
+    verify_as(NAMESPACE, data, armored)
+}
+
+pub fn verify_as(namespace: &str, data: &[u8], armored: &str) -> Result<KeyData> {
     let sig = SshSig::from_pem(armored).map_err(|e| Error::Signature(e.to_string()))?;
     let key = sig.public_key().clone();
     PublicKey::from(key.clone())
-        .verify(NAMESPACE, data, &sig)
+        .verify(namespace, data, &sig)
         .map_err(|e| Error::Signature(e.to_string()))?;
     Ok(key)
+}
+
+/// A key as `ssh-ed25519 AAAA...`, without a comment.
+pub fn key_to_string(key: &KeyData) -> String {
+    PublicKey::from(key.clone())
+        .to_openssh()
+        .expect("encoding a public key into a String cannot fail")
+}
+
+pub fn key_from_string(s: &str) -> Result<KeyData> {
+    PublicKey::from_openssh(s.trim())
+        .map(|k| k.key_data().clone())
+        .map_err(|e| Error::Signature(format!("not an OpenSSH public key: {e}")))
+}
+
+pub fn fingerprint(key: &KeyData) -> String {
+    key.fingerprint(Default::default()).to_string()
 }
 
 fn expand_home(path: &Path) -> PathBuf {

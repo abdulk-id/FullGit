@@ -2,17 +2,24 @@
 //! `refs/fullgit/*`. See `DESIGN.md` at the repository root.
 
 pub mod entity;
+pub mod identity;
 pub mod model;
 pub mod op;
+pub mod payload;
+pub mod policy;
 pub mod refs;
 pub mod remote;
 pub mod sign;
 pub mod sync;
+pub mod trust;
 
 pub use entity::{Merged, append, load, merge};
-pub use model::Model;
+pub use identity::Identity;
+pub use model::{Ctx, Model};
 pub use op::{Op, StoredOp, read_op, write_op};
+pub use policy::Policy;
 pub use sign::{Signer, SshKeygenSigner, verify};
+pub use trust::{Actor, Role, Trust};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -36,6 +43,8 @@ pub enum Error {
     NotFound(String),
     #[error("{0} matches more than one entity")]
     Ambiguous(String),
+    #[error("policy: {0}")]
+    Policy(String),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

@@ -351,6 +351,7 @@ dependencies = [
  "fullgit-core",
  "git2",
  "serde_json",
+ "ssh-key",
 ]
 
 [[package]]

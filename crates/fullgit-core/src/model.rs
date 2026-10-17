@@ -2,6 +2,7 @@
 //! order, into its current state. Each entity lives at
 //! `refs/fullgit/<NAMESPACE>/<id>`, where `<id>` is its root operation's oid.
 
+use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use git2::{Oid, Repository};
@@ -10,6 +11,7 @@ use crate::entity::{self, MERGE_KIND};
 use crate::op::{StoredOp, write_op};
 use crate::refs;
 use crate::sign::Signer;
+use crate::trust::{Actor, Trust};
 use crate::{Error, Result};
 
 pub trait Model: Default {
@@ -17,9 +19,33 @@ pub trait Model: Default {
     const NAMESPACE: &'static str;
 
     /// Applies one operation. `op.parents.is_empty()` marks the root.
-    /// Returning `Err` rejects the operation; every replica rejects the same
-    /// operations, so state stays identical everywhere.
-    fn apply(&mut self, op: &StoredOp) -> Result<(), String>;
+    /// Returning `Err` rejects the operation, and must leave the state
+    /// unchanged. Every replica rejects the same operations, so state stays
+    /// identical everywhere.
+    fn apply(&mut self, op: &StoredOp, ctx: &Ctx) -> Result<(), String>;
+
+    /// Re-checks an applied operation against the final state. Only models
+    /// whose own state grants authority (identities, the policy) need this:
+    /// a later revocation can take back an operation that was valid when it
+    /// was applied.
+    fn still_valid(&self, _op: &StoredOp, _ctx: &Ctx) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// What a model may consult besides its own state.
+pub struct Ctx<'a> {
+    pub repo: &'a Repository,
+    pub trust: &'a Trust,
+    /// The entity being replayed.
+    pub entity: Oid,
+}
+
+impl Ctx<'_> {
+    /// Who signed `op`, and the role they held for it.
+    pub fn actor(&self, op: &StoredOp) -> Actor {
+        self.trust.actor(self.repo, self.entity, op)
+    }
 }
 
 /// An operation that was skipped during replay, and why.
@@ -45,6 +71,7 @@ pub fn refname<M: Model>(id: Oid) -> String {
 /// Creates a new entity from a root operation and returns its id.
 pub fn create<M: Model>(
     repo: &Repository,
+    trust: &Trust,
     signer: &dyn Signer,
     kind: &str,
     mut payload: serde_json::Value,
@@ -56,8 +83,13 @@ pub fn create<M: Model>(
     }
     let id = write_op(repo, signer, &[], kind, payload)?;
     let root = crate::op::read_op(repo, id)?;
+    let ctx = Ctx {
+        repo,
+        trust,
+        entity: id,
+    };
     M::default()
-        .apply(&root)
+        .apply(&root, &ctx)
         .map_err(|reason| Error::Rejected { op: id, reason })?;
     repo.reference(&refname::<M>(id), id, false, &format!("fullgit: {kind}"))?;
     Ok(id)
@@ -68,17 +100,23 @@ pub fn create<M: Model>(
 /// written.
 pub fn update<M: Model>(
     repo: &Repository,
+    trust: &Trust,
     id: Oid,
     signer: &dyn Signer,
     kind: &str,
     payload: serde_json::Value,
 ) -> Result<Oid> {
-    let mut current = load::<M>(repo, id)?;
+    let mut current = load::<M>(repo, trust, id)?;
     let op_id = write_op(repo, signer, &[current.head], kind, payload)?;
     let op = crate::op::read_op(repo, op_id)?;
+    let ctx = Ctx {
+        repo,
+        trust,
+        entity: id,
+    };
     current
         .model
-        .apply(&op)
+        .apply(&op, &ctx)
         .map_err(|reason| Error::Rejected { op: op_id, reason })?;
     repo.reference_matching(
         &refname::<M>(id),
@@ -94,7 +132,7 @@ pub fn update<M: Model>(
     Ok(op_id)
 }
 
-pub fn load<M: Model>(repo: &Repository, id: Oid) -> Result<Loaded<M>> {
+pub fn load<M: Model>(repo: &Repository, trust: &Trust, id: Oid) -> Result<Loaded<M>> {
     let head = repo
         .refname_to_id(&refname::<M>(id))
         .map_err(|_| Error::NotFound(id.to_string()))?;
@@ -105,27 +143,55 @@ pub fn load<M: Model>(repo: &Repository, id: Oid) -> Result<Loaded<M>> {
             reason: format!("entity root is not {id}"),
         });
     }
+    let ctx = Ctx {
+        repo,
+        trust,
+        entity: id,
+    };
 
-    let mut model = M::default();
-    let mut rejected = Vec::new();
-    for op in &ops {
-        if op.op.kind == MERGE_KIND {
-            continue;
-        }
-        if let Err(reason) = model.apply(op) {
-            if op.id == id {
-                return Err(Error::Rejected { op: id, reason });
+    // Replay, then re-check what was applied against the final state. If an
+    // op no longer holds, drop the last such op and replay without it: it
+    // may be the revocation that invalidated the others, and is itself
+    // invalid. Each round drops one op, so this ends.
+    let mut dropped: HashMap<Oid, String> = HashMap::new();
+    loop {
+        let mut model = M::default();
+        let mut rejected = Vec::new();
+        let mut applied = Vec::new();
+        for op in &ops {
+            if op.op.kind == MERGE_KIND {
+                continue;
             }
-            rejected.push(Rejected { op: op.id, reason });
+            let result = match dropped.get(&op.id) {
+                Some(reason) => Err(reason.clone()),
+                None => model.apply(op, &ctx),
+            };
+            match result {
+                Ok(()) => applied.push(op),
+                Err(reason) if op.id == id => return Err(Error::Rejected { op: id, reason }),
+                Err(reason) => rejected.push(Rejected { op: op.id, reason }),
+            }
+        }
+        let invalid = applied
+            .iter()
+            .rev()
+            .filter(|op| op.id != id)
+            .find_map(|op| model.still_valid(op, &ctx).err().map(|r| (op.id, r)));
+        match invalid {
+            Some((op, reason)) => {
+                dropped.insert(op, reason);
+            }
+            None => {
+                return Ok(Loaded {
+                    id,
+                    head,
+                    model,
+                    ops,
+                    rejected,
+                });
+            }
         }
     }
-    Ok(Loaded {
-        id,
-        head,
-        model,
-        ops,
-        rejected,
-    })
 }
 
 /// Ids of all local entities of this type, sorted.

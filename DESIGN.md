@@ -1,6 +1,6 @@
 # FullGit — design
 
-Status: **draft, Phase 2**.
+Status: **draft, Phase 3**.
 
 ## Goals
 
@@ -39,7 +39,7 @@ operations before they land.
 
 ```
 refs/fullgit/identities/<id>
-refs/fullgit/policy
+refs/fullgit/policy/<id>
 refs/fullgit/issues/<id>
 refs/fullgit/prs/<id>
 refs/fullgit/users/<identity-id>/local
@@ -70,9 +70,14 @@ Commit timestamps are informational only and never used for ordering.
 - Each entity type implements the `Model` trait: `apply(&mut state, op)`.
   Concurrent writes resolve through that order: last-writer-wins for scalar
   fields, set semantics for labels and assignees, append for comments.
-- An op the model rejects (unknown type, bad payload, and from Phase 2 a
-  missing permission) is skipped and listed as rejected. Every replica skips
-  the same ops. A rejected root makes the whole entity invalid.
+- An op the model rejects (unknown type, bad payload, missing permission) is
+  skipped and listed as rejected. Every replica skips the same ops. A
+  rejected root makes the whole entity invalid.
+- Models whose own state grants authority (identities, the policy) also
+  re-check every applied op against the final state, because a later
+  revocation can take back an op that was valid when applied. If one fails,
+  the last failing op is dropped and the entity replayed without it (it may
+  be the revocation that invalidated the others); repeat until stable.
 - `model::update` applies an op to the current state before moving the ref,
   so a client never writes an op it would itself reject.
 - Root ops get a `nonce` in their payload; otherwise two identical creations
@@ -110,30 +115,56 @@ Commit timestamps are informational only and never used for ordering.
   signing. The signing key comes from `user.signingkey`.
 - Signing shells out to `ssh-keygen -Y sign`, exactly like git does, so
   ssh-agent and passphrase-protected keys work. Verification is in-process.
-- Identity entity ops: `identity.create {name, email, keys}`,
-  `identity.add_key`, `identity.revoke_key`. Each must be signed by a key that
-  is currently valid for that identity; `identity.create` is self-signed.
+- Identity ops:
+  - `identity.create {name, email}`: the signing key becomes the first key.
+  - `identity.edit {name?, email?}`
+  - `identity.add_key {key, proof}`: `proof` is the *new* key's signature
+    (namespace `fullgit-key`) over the identity id and the key. Without it,
+    anyone could add someone else's public key to their own identity and be
+    credited with that person's operations.
+  - `identity.remove_key {key, keep}`: see revocation below. The last key
+    can't be removed.
+
+  All but `create` must be signed by a key the identity holds.
 - An identity is only a claim. Trust comes from the policy.
+- CLI: `fullgit id create | show | list | edit | add-key | prove |
+  remove-key`. Adding a key that lives on another machine: run
+  `fullgit id prove <id>` there and pass its output to
+  `fullgit id add-key --proof`.
 
 ## Permissions (policy)
 
-- A `refs/fullgit/policy` entity. Its root op, `policy.genesis {owners}`, is
-  signed by an owner.
-- The genesis oid is committed to the main tree as `.fullgit/root`, so a
-  replaced policy ref is detected rather than silently trusted.
+- A `refs/fullgit/policy/<id>` entity. Its root op, `policy.genesis
+  {owners}`, must be signed by one of the owners.
+- **Which policy to trust** is pinned. The genesis id is committed to the
+  main tree as `.fullgit/root`; `fullgit init` records it in the clone's
+  config as `fullgit.root` (trust on first use). Afterwards a different
+  committed root is refused until the user changes `fullgit.root`
+  themselves, so pushing a new policy with yourself as owner doesn't work.
+- Without a policy, nothing is restricted: every signer acts as an owner.
 - Roles: `owner` > `maintainer` > `contributor` > `reader`. Groups are named
   sets of identities, e.g. `secrets:prod`.
-- Ops: `policy.grant {identity, role}`, `policy.revoke`, `policy.group_add`,
-  `policy.group_remove`, `policy.rule {...}`. Only owners may change the policy.
-- An operation on any entity is valid iff its signing key belongs to an identity
-  that holds the required role.
-- Revocation (proposed, to validate in Phase 2): an op by a revoked identity
-  stays valid only if an op by a still-authorized identity causally depends on
-  it. This is deterministic and needs no trusted clock.
-- **Protected branches**: `policy.rule {protect: "main", approvals: 1}`.
-  `fullgit verify main` checks that every first-parent commit on `main` is a
-  merge recorded by a valid `pr.merge` op. Pushes can't be prevented on a dumb
-  host, only detected; use the host's branch protection alongside where it exists.
+- Ops: `policy.grant {identity, role, keep?}`, `policy.revoke {identity,
+  keep}`, `policy.group_add {group, identity}`, `policy.group_remove`. Only
+  owners change the policy, and the last owner can't be removed.
+- An operation's **actor** is the identity holding its signing key, with that
+  identity's role. Each entity type decides what role each op needs.
+- **Revocation.** There's no trusted clock, so a revoked key could otherwise
+  keep writing ops and claim they are old. A revocation (`policy.revoke`, a
+  lowering `policy.grant`, or `identity.remove_key`) therefore records
+  `keep`: for every entity holding ops by the revoked identity or key, the
+  head the revoker had at that moment. Afterwards, an op by them counts
+  (with their old role) only if it is an ancestor of the kept head of its
+  entity. Ops the revoker hadn't seen, written later, or backdated onto
+  old parents don't. Deterministic, and computed by the client that
+  revokes.
+- **Protected branches** (Phase 6): `policy.rule {protect: "main",
+  approvals: 1}`. `fullgit verify main` checks that every first-parent commit
+  on `main` is a merge recorded by a valid `pr.merge` op. Pushes can't be
+  prevented on a dumb host, only detected; use the host's branch protection
+  alongside where it exists.
+- CLI: `fullgit policy init | show | grant | revoke | group add | group
+  remove`.
 
 ## Secrets
 
@@ -219,7 +250,7 @@ Commit timestamps are informational only and never used for ordering.
 |---|---|---|
 | 0. Spike | Signed operation commits under `refs/fullgit/*`; verified by `git verify-commit`; survive push/fetch to a local bare repo; script to check real hosts | done; GitHub passes (2026-10-17), GitLab untested |
 | 1. Engine | Entity library, deterministic replay, `sync` | done (2026-10-17) |
-| 2. Identity + policy | `init`, `id`, roles, validation, revocation | |
+| 2. Identity + policy | `init`, `id`, roles, validation, revocation | done (2026-10-17) |
 | 3. Secrets | Filter driver, age, guards, `rekey` | |
 | 4. Per-user files | `local add/save/restore`, hooks | |
 | 5. Issues | CLI: create, list, show, comment, close | |
@@ -228,7 +259,14 @@ Commit timestamps are informational only and never used for ordering.
 
 ## Open questions
 
-- Revocation semantics (see Permissions).
+- Revocation drops a revoked member's ops that the revoker hadn't fetched
+  yet, even honest ones. There's no op to re-admit them yet.
+- Owners are trusted equals. If two owners revoke each other concurrently,
+  replay order decides, and a malicious owner can choose a clock that wins.
+  Recovery is a new genesis and an explicit change of `fullgit.root`.
+- A key held by a compromised machine can still be used to race the
+  identity's other keys; the fix is an owner revoking the identity, and the
+  person creating a new one.
 - Contributors without push access (forks): how their operations reach the repo.
 - Hosts: GitHub accepts, lists and serves `refs/fullgit/*` (checked
   2026-10-17; a test ref left in a private throwaway repo was still there 5

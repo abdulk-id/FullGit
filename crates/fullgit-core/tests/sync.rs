@@ -4,45 +4,15 @@ mod common;
 
 use std::collections::BTreeSet;
 
-use common::{Fixture, git};
-use fullgit_core::model::{self, Model};
+use common::{Fixture, Register, git};
+use fullgit_core::model;
 use fullgit_core::sync::{Outcome, sync};
-use fullgit_core::{Error, StoredOp, entity};
+use fullgit_core::{Error, Trust, entity};
 use git2::Repository;
 use serde_json::json;
 
-/// A minimal entity: one last-writer-wins value and a grow-only tag set.
-#[derive(Debug, Default, PartialEq)]
-struct Register {
-    value: String,
-    tags: BTreeSet<String>,
-}
-
-impl Model for Register {
-    const NAMESPACE: &'static str = "registers";
-
-    fn apply(&mut self, op: &StoredOp) -> Result<(), String> {
-        let field = |k: &str| {
-            op.op.payload[k]
-                .as_str()
-                .map(str::to_owned)
-                .ok_or(format!("missing {k}"))
-        };
-        match (op.parents.is_empty(), op.op.kind.as_str()) {
-            (true, "reg.create") => self.value = field("value")?,
-            (true, kind) => return Err(format!("{kind} cannot create a register")),
-            (false, "reg.set") => self.value = field("value")?,
-            (false, "reg.tag") => {
-                self.tags.insert(field("tag")?);
-            }
-            (false, kind) => return Err(format!("unknown operation {kind}")),
-        }
-        Ok(())
-    }
-}
-
 fn state(repo: &Repository, id: git2::Oid) -> (git2::Oid, Register) {
-    let loaded = model::load::<Register>(repo, id).unwrap();
+    let loaded = model::load::<Register>(repo, &Trust::default(), id).unwrap();
     (loaded.head, loaded.model)
 }
 
@@ -52,16 +22,46 @@ fn create_update_list_resolve() {
     let (_, repo) = fx.repo("r");
     let s = fx.signer();
 
-    let a = model::create::<Register>(&repo, &s, "reg.create", json!({ "value": "x" })).unwrap();
-    let b = model::create::<Register>(&repo, &s, "reg.create", json!({ "value": "x" })).unwrap();
+    let a = model::create::<Register>(
+        &repo,
+        &Trust::default(),
+        &s,
+        "reg.create",
+        json!({ "value": "x" }),
+    )
+    .unwrap();
+    let b = model::create::<Register>(
+        &repo,
+        &Trust::default(),
+        &s,
+        "reg.create",
+        json!({ "value": "x" }),
+    )
+    .unwrap();
     assert_ne!(a, b, "identical creations are distinct entities");
 
     let mut ids = vec![a, b];
     ids.sort();
     assert_eq!(model::list::<Register>(&repo).unwrap(), ids);
 
-    model::update::<Register>(&repo, a, &s, "reg.set", json!({ "value": "y" })).unwrap();
-    model::update::<Register>(&repo, a, &s, "reg.tag", json!({ "tag": "t" })).unwrap();
+    model::update::<Register>(
+        &repo,
+        &Trust::default(),
+        a,
+        &s,
+        "reg.set",
+        json!({ "value": "y" }),
+    )
+    .unwrap();
+    model::update::<Register>(
+        &repo,
+        &Trust::default(),
+        a,
+        &s,
+        "reg.tag",
+        json!({ "tag": "t" }),
+    )
+    .unwrap();
     let (_, reg) = state(&repo, a);
     assert_eq!(reg.value, "y");
     assert_eq!(reg.tags, BTreeSet::from(["t".to_owned()]));
@@ -79,11 +79,19 @@ fn invalid_operations_are_refused_locally_and_skipped_in_replay() {
     let fx = Fixture::new();
     let (_, repo) = fx.repo("r");
     let s = fx.signer();
-    let id = model::create::<Register>(&repo, &s, "reg.create", json!({ "value": "x" })).unwrap();
+    let id = model::create::<Register>(
+        &repo,
+        &Trust::default(),
+        &s,
+        "reg.create",
+        json!({ "value": "x" }),
+    )
+    .unwrap();
     let (head, _) = state(&repo, id);
 
     // update() refuses to write an op the model would reject.
-    let err = model::update::<Register>(&repo, id, &s, "reg.bogus", json!({})).unwrap_err();
+    let err = model::update::<Register>(&repo, &Trust::default(), id, &s, "reg.bogus", json!({}))
+        .unwrap_err();
     assert!(matches!(err, Error::Rejected { .. }), "{err}");
     assert_eq!(state(&repo, id).0, head, "ref unchanged");
 
@@ -96,14 +104,31 @@ fn invalid_operations_are_refused_locally_and_skipped_in_replay() {
         json!({}),
     )
     .unwrap();
-    model::update::<Register>(&repo, id, &s, "reg.set", json!({ "value": "y" })).unwrap();
-    let loaded = model::load::<Register>(&repo, id).unwrap();
+    model::update::<Register>(
+        &repo,
+        &Trust::default(),
+        id,
+        &s,
+        "reg.set",
+        json!({ "value": "y" }),
+    )
+    .unwrap();
+    let loaded = model::load::<Register>(&repo, &Trust::default(), id).unwrap();
     assert_eq!(loaded.model.value, "y");
     assert_eq!(loaded.rejected.len(), 1);
     assert_eq!(loaded.rejected[0].op, bad);
 
     // A root the model rejects makes the entity unloadable.
-    assert!(model::create::<Register>(&repo, &s, "reg.set", json!({ "value": "x" })).is_err());
+    assert!(
+        model::create::<Register>(
+            &repo,
+            &Trust::default(),
+            &s,
+            "reg.set",
+            json!({ "value": "x" })
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -114,8 +139,14 @@ fn two_clones_converge() {
     let (_, bob) = fx.clone(&remote, "bob");
     let (sa, sb) = (fx.new_signer("alice"), fx.new_signer("bob"));
 
-    let id =
-        model::create::<Register>(&alice, &sa, "reg.create", json!({ "value": "v0" })).unwrap();
+    let id = model::create::<Register>(
+        &alice,
+        &Trust::default(),
+        &sa,
+        "reg.create",
+        json!({ "value": "v0" }),
+    )
+    .unwrap();
     assert!(sync(&alice, "origin", Some(&sa)).unwrap().pushed);
 
     let report = sync(&bob, "origin", Some(&sb)).unwrap();
@@ -124,10 +155,42 @@ fn two_clones_converge() {
     assert_eq!(state(&bob, id), state(&alice, id));
 
     // Concurrent edits on both sides.
-    model::update::<Register>(&alice, id, &sa, "reg.set", json!({ "value": "alice" })).unwrap();
-    model::update::<Register>(&alice, id, &sa, "reg.tag", json!({ "tag": "a" })).unwrap();
-    model::update::<Register>(&bob, id, &sb, "reg.set", json!({ "value": "bob" })).unwrap();
-    model::update::<Register>(&bob, id, &sb, "reg.tag", json!({ "tag": "b" })).unwrap();
+    model::update::<Register>(
+        &alice,
+        &Trust::default(),
+        id,
+        &sa,
+        "reg.set",
+        json!({ "value": "alice" }),
+    )
+    .unwrap();
+    model::update::<Register>(
+        &alice,
+        &Trust::default(),
+        id,
+        &sa,
+        "reg.tag",
+        json!({ "tag": "a" }),
+    )
+    .unwrap();
+    model::update::<Register>(
+        &bob,
+        &Trust::default(),
+        id,
+        &sb,
+        "reg.set",
+        json!({ "value": "bob" }),
+    )
+    .unwrap();
+    model::update::<Register>(
+        &bob,
+        &Trust::default(),
+        id,
+        &sb,
+        "reg.tag",
+        json!({ "tag": "b" }),
+    )
+    .unwrap();
 
     assert_eq!(
         sync(&alice, "origin", Some(&sa)).unwrap().refs[&r],
@@ -169,13 +232,27 @@ fn both_sides_merging_still_converges() {
     ];
     let repos = [&alice, &bob, &carol];
 
-    let id = model::create::<Register>(&alice, &signers[0], "reg.create", json!({ "value": "v0" }))
-        .unwrap();
+    let id = model::create::<Register>(
+        &alice,
+        &Trust::default(),
+        &signers[0],
+        "reg.create",
+        json!({ "value": "v0" }),
+    )
+    .unwrap();
     for (repo, s) in repos.iter().zip(&signers) {
         sync(repo, "origin", Some(s)).unwrap();
     }
     for (i, (repo, s)) in repos.iter().zip(&signers).enumerate() {
-        model::update::<Register>(repo, id, s, "reg.tag", json!({ "tag": i.to_string() })).unwrap();
+        model::update::<Register>(
+            repo,
+            &Trust::default(),
+            id,
+            s,
+            "reg.tag",
+            json!({ "tag": i.to_string() }),
+        )
+        .unwrap();
     }
     // Two rounds in each order is enough for everyone to see everything.
     for _ in 0..2 {
@@ -198,10 +275,22 @@ fn forged_remote_operations_are_rejected_and_not_overwritten() {
     let (_, bob) = fx.clone(&remote, "bob");
     let (sa, sb) = (fx.new_signer("alice"), fx.new_signer("bob"));
 
-    let id =
-        model::create::<Register>(&alice, &sa, "reg.create", json!({ "value": "v0" })).unwrap();
-    let other =
-        model::create::<Register>(&alice, &sa, "reg.create", json!({ "value": "ok" })).unwrap();
+    let id = model::create::<Register>(
+        &alice,
+        &Trust::default(),
+        &sa,
+        "reg.create",
+        json!({ "value": "v0" }),
+    )
+    .unwrap();
+    let other = model::create::<Register>(
+        &alice,
+        &Trust::default(),
+        &sa,
+        "reg.create",
+        json!({ "value": "ok" }),
+    )
+    .unwrap();
     sync(&alice, "origin", Some(&sa)).unwrap();
     let r = model::refname::<Register>(id);
     let alice_head = state(&alice, id).0;
@@ -235,7 +324,7 @@ fn forged_remote_operations_are_rejected_and_not_overwritten() {
         "{:?}",
         report.refs[&r]
     );
-    assert!(model::load::<Register>(&bob, id).is_err());
+    assert!(model::load::<Register>(&bob, &Trust::default(), id).is_err());
     assert_eq!(
         report.refs[&model::refname::<Register>(other)],
         Outcome::New
@@ -243,7 +332,15 @@ fn forged_remote_operations_are_rejected_and_not_overwritten() {
 
     // Alice keeps her version, and her sync neither fails nor overwrites
     // the remote.
-    model::update::<Register>(&alice, other, &sa, "reg.set", json!({ "value": "new" })).unwrap();
+    model::update::<Register>(
+        &alice,
+        &Trust::default(),
+        other,
+        &sa,
+        "reg.set",
+        json!({ "value": "new" }),
+    )
+    .unwrap();
     let report = sync(&alice, "origin", Some(&sa)).unwrap();
     assert!(report.pushed);
     assert!(matches!(report.refs[&r], Outcome::Rejected(_)));
@@ -263,12 +360,34 @@ fn diverged_entities_wait_for_a_signing_key() {
     let (_, bob) = fx.clone(&remote, "bob");
     let (sa, sb) = (fx.new_signer("alice"), fx.new_signer("bob"));
 
-    let id =
-        model::create::<Register>(&alice, &sa, "reg.create", json!({ "value": "v0" })).unwrap();
+    let id = model::create::<Register>(
+        &alice,
+        &Trust::default(),
+        &sa,
+        "reg.create",
+        json!({ "value": "v0" }),
+    )
+    .unwrap();
     sync(&alice, "origin", Some(&sa)).unwrap();
     sync(&bob, "origin", None).unwrap();
-    model::update::<Register>(&alice, id, &sa, "reg.set", json!({ "value": "a" })).unwrap();
-    model::update::<Register>(&bob, id, &sb, "reg.set", json!({ "value": "b" })).unwrap();
+    model::update::<Register>(
+        &alice,
+        &Trust::default(),
+        id,
+        &sa,
+        "reg.set",
+        json!({ "value": "a" }),
+    )
+    .unwrap();
+    model::update::<Register>(
+        &bob,
+        &Trust::default(),
+        id,
+        &sb,
+        "reg.set",
+        json!({ "value": "b" }),
+    )
+    .unwrap();
     sync(&alice, "origin", Some(&sa)).unwrap();
 
     let r = model::refname::<Register>(id);
@@ -305,8 +424,14 @@ fn rejected_push_is_retried() {
     std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
     std::fs::set_permissions(&hook, perms).unwrap();
 
-    let id =
-        model::create::<Register>(&alice, &sa, "reg.create", json!({ "value": "v0" })).unwrap();
+    let id = model::create::<Register>(
+        &alice,
+        &Trust::default(),
+        &sa,
+        "reg.create",
+        json!({ "value": "v0" }),
+    )
+    .unwrap();
     assert!(sync(&alice, "origin", Some(&sa)).unwrap().pushed);
     assert!(marker.exists(), "the first push was declined");
     let r = model::refname::<Register>(id);

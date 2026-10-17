@@ -2,12 +2,50 @@
 //! and `ssh-keygen`.
 #![allow(dead_code)]
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use fullgit_core::SshKeygenSigner;
+use fullgit_core::{Ctx, Model, Role, SshKeygenSigner, StoredOp};
 use git2::Repository;
 use tempfile::TempDir;
+
+/// A minimal entity: one last-writer-wins value and a grow-only tag set.
+/// Contributors set the value; tagging takes a maintainer.
+#[derive(Debug, Default, PartialEq)]
+pub struct Register {
+    pub value: String,
+    pub tags: BTreeSet<String>,
+}
+
+impl Model for Register {
+    const NAMESPACE: &'static str = "registers";
+
+    fn apply(&mut self, op: &StoredOp, ctx: &Ctx) -> Result<(), String> {
+        let needs = if op.op.kind == "reg.tag" {
+            Role::Maintainer
+        } else {
+            Role::Contributor
+        };
+        ctx.actor(op).require(needs)?;
+        let field = |k: &str| {
+            op.op.payload[k]
+                .as_str()
+                .map(str::to_owned)
+                .ok_or(format!("missing {k}"))
+        };
+        match (op.parents.is_empty(), op.op.kind.as_str()) {
+            (true, "reg.create") => self.value = field("value")?,
+            (true, kind) => return Err(format!("{kind} cannot create a register")),
+            (false, "reg.set") => self.value = field("value")?,
+            (false, "reg.tag") => {
+                self.tags.insert(field("tag")?);
+            }
+            (false, kind) => return Err(format!("unknown operation {kind}")),
+        }
+        Ok(())
+    }
+}
 
 pub fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")

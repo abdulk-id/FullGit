@@ -518,7 +518,9 @@ fn security_headers<R: Read>(r: Response<R>) -> Response<R> {
                form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
     r.with_header(Header::from_bytes("Content-Security-Policy", csp).expect("valid header"))
         .with_header(Header::from_bytes("X-Frame-Options", "DENY").expect("valid header"))
-        .with_header(Header::from_bytes("Referrer-Policy", "no-referrer").expect("valid header"))
+        // Not `no-referrer`: under it, browsers send `Origin: null` with
+        // every POST, and `check` refuses them all.
+        .with_header(Header::from_bytes("Referrer-Policy", "same-origin").expect("valid header"))
         .with_header(Header::from_bytes("Cache-Control", "no-store").expect("valid header"))
 }
 

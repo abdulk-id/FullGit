@@ -206,6 +206,21 @@ fn only_the_token_holder_gets_in() {
         csp.contains("default-src 'none'") && !csp.contains("script"),
         "{csp}"
     );
+    // Browsers send this page's origin with its forms only if the referrer
+    // policy lets them; under `no-referrer` they send `Origin: null`.
+    assert_eq!(home.header("Referrer-Policy"), "same-origin");
+    let null = s.raw(
+        "POST",
+        "/issues/new",
+        &[
+            ("Host", &host),
+            ("Cookie", &s.cookie()),
+            ("Origin", "null"),
+            ("Content-Type", "application/x-www-form-urlencoded"),
+        ],
+        "title=pwned",
+    );
+    assert_eq!(null.status, 403);
 }
 
 #[test]

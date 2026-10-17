@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "type": "identity.create",
+  "lamport": 1,
+  "payload": {
+    "email": "235873002+abdulk-id@users.noreply.github.com",
+    "name": "Abdul Kareem",
+    "nonce": "18df61aadeaeab2e1223a8"
+  }
+}

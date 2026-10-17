@@ -255,6 +255,7 @@ fn issues_and_pull_requests_in_the_browser() {
         &["pr", "new", "-t", "Retry sync", "--target", "master"],
     );
     let id = out.split_whitespace().nth(3).unwrap().to_owned();
+    assert_eq!(id.len(), 4, "{out}");
     fg_ok(&bob, &["sync"]);
 
     let s = start(&alice);
@@ -336,6 +337,7 @@ fn issues_and_pull_requests_in_the_browser() {
         .next()
         .unwrap()
         .to_owned();
+    assert_eq!(issue.len(), 4, "{to}");
     let page = s.get(&format!("/issues/{issue}")).body;
     assert!(
         page.contains("&lt;b&gt;Docs&lt;/b&gt; are stale") && page.contains("<em>README</em>"),

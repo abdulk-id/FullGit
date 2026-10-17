@@ -67,7 +67,7 @@ fn row(ctx: &Ctx, id: Oid, p: &Pr) -> String {
     format!(
         r#"<div class="row"><span class="dot {st}"></span><div><a class="t" href="/prs/{s}">{t}</a>{chip}<div class="sub">#{s} by {who} · <code class="ref">{src}</code> → <code class="ref">{tgt}</code> · r{n} · updated {when}</div></div></div>"#,
         st = p.status.as_str(),
-        s = short(id),
+        s = ctx.prs.of(id),
         t = esc(&p.title),
         who = esc(&ctx.who(p.author)),
         src = esc(&p.source),
@@ -158,7 +158,7 @@ pub fn create(ctx: &Ctx, req: &Req) -> Result<Resp> {
         base,
     )?;
     Ok(Resp::Redirect(with_param(
-        &format!("/prs/{}", short(id)),
+        &format!("/prs/{}", ctx.prs.of(id)),
         "msg",
         "Opened. Sync shares it, with its commits.",
     )))
@@ -178,14 +178,14 @@ fn header(ctx: &Ctx, id: Oid, p: &Pr, tab: &str) -> String {
         esc(&p.source),
         on("conversation"),
         on("diff"),
-        s = short(id),
+        s = ctx.prs.of(id),
     )
 }
 
 pub fn show(ctx: &Ctx, req: &Req, id: Oid) -> Result<Resp> {
     let loaded = pr::load(ctx.repo, &ctx.trust, id)?;
     let p = &loaded.model;
-    let here = format!("/prs/{}", short(id));
+    let here = format!("/prs/{}", ctx.prs.of(id));
     let mut b = header(ctx, id, p, "conversation");
     b.push_str(r#"<div class="layout"><div>"#);
     b.push_str(&comment_box(
@@ -315,7 +315,7 @@ pub fn show(ctx: &Ctx, req: &Req, id: Oid) -> Result<Resp> {
             b,
             r#"<p class="meta">Ignored {} operation(s) that weren't allowed; <code>fullgit pr show {}</code> lists them.</p>"#,
             loaded.rejected.len(),
-            short(id)
+            ctx.prs.of(id)
         );
     }
     Ok(ctx.page(req, &p.title, b))
@@ -387,7 +387,7 @@ fn sidebar(ctx: &Ctx, b: &mut String, p: &Pr, here: &str) {
 /// A comment and its replies. Line comments show the code they're on;
 /// `link` adds a link to that line in the diff.
 fn thread(ctx: &Ctx, id: Oid, p: &Pr, root: &Comment, back_to: &str, link: bool) -> String {
-    let here = format!("/prs/{}", short(id));
+    let here = format!("/prs/{}", ctx.prs.of(id));
     let mut s = format!(r#"<div class="box thread" id="c-{}">"#, short(root.id));
     match &root.location {
         Some(l) => {
@@ -517,7 +517,7 @@ pub fn diff(ctx: &Ctx, req: &Req, id: Oid) -> Result<Resp> {
         })
         .transpose()?;
     let r = &p.revisions[n - 1];
-    let here = format!("/prs/{}", short(id));
+    let here = format!("/prs/{}", ctx.prs.of(id));
     let mut b = header(ctx, id, &p, "diff");
     b.push_str(r#"<div class="meta">Revision: "#);
     for v in 1..=p.revisions.len() {
@@ -772,7 +772,7 @@ fn range_diff(ctx: &Ctx, base1: Oid, head1: Oid, base2: Oid, head2: Oid) -> Resu
 }
 
 pub fn act(ctx: &Ctx, req: &Req, id: Oid, action: &str) -> Result<Resp> {
-    let here = format!("/prs/{}", short(id));
+    let here = format!("/prs/{}", ctx.prs.of(id));
     let back_to = super::back_of(req).to_owned();
     if action == "merge" {
         let msg = merge_now(ctx.repo, id, ctx.remote)?;

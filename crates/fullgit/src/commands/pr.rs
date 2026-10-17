@@ -4,6 +4,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use clap::{ArgGroup, Subcommand};
+use fullgit_core::model::{self, Abbrev};
 use fullgit_core::pr::{self, Location, Merging, Place, Pr, Readiness, Revision, Side, Status};
 use fullgit_core::pr::{Verdict, What};
 use fullgit_core::{Role, Trust, sync};
@@ -194,7 +195,7 @@ pub fn run(repo: &Repository, cmd: PrCmd) -> Result<()> {
             println!(
                 "opened pull request {} ({source} → {target}, {commits} commit(s)); \
                  `fullgit sync` shares it",
-                short_id(id)
+                name(repo, id)?
             );
         }
         PrCmd::List {
@@ -206,12 +207,13 @@ pub fn run(repo: &Repository, cmd: PrCmd) -> Result<()> {
             let author = author
                 .map(|w| crate::resolve(repo, &trust, &w))
                 .transpose()?;
+            let names = model::abbrev::<Pr>(repo)?;
             let mut shown = Vec::new();
             for (id, loaded) in pr::all(repo, &trust)? {
                 let p = match loaded {
                     Ok(l) => l.model,
                     Err(e) => {
-                        eprintln!("warning: pull request {} is invalid: {e}", short_id(id));
+                        eprintln!("warning: pull request {} is invalid: {e}", names.of(id));
                         continue;
                     }
                 };
@@ -242,7 +244,7 @@ pub fn run(repo: &Repository, cmd: PrCmd) -> Result<()> {
                 };
                 println!(
                     "{}  {:<6}  {}  [{} → {}, r{}{state}]  ({})",
-                    short_id(*id),
+                    names.of(*id),
                     p.status,
                     p.title,
                     p.source,
@@ -258,7 +260,7 @@ pub fn run(repo: &Repository, cmd: PrCmd) -> Result<()> {
         PrCmd::Show { id } => {
             let id = pr::resolve(repo, &id)?;
             let loaded = pr::load(repo, &trust, id)?;
-            show(repo, &trust, id, &loaded.model);
+            show(repo, &trust, &name(repo, id)?, &loaded.model);
             if !loaded.rejected.is_empty() {
                 eprintln!();
                 eprintln!("ignored {} operation(s):", loaded.rejected.len());
@@ -344,7 +346,7 @@ pub fn run(repo: &Repository, cmd: PrCmd) -> Result<()> {
             )?;
             println!(
                 "pull request {} is at revision {}; `fullgit sync` shares it",
-                short_id(id),
+                name(repo, id)?,
                 p.revisions.len() + 1
             );
         }
@@ -501,8 +503,11 @@ pub(crate) fn merge_now(repo: &Repository, id: Oid, remote: &str) -> Result<Stri
     let p = pr::load(repo, &trust, id)?.model;
     match p.status {
         Status::Open => {}
-        Status::Closed => bail!("pull request {} is closed; reopen it first", short_id(id)),
-        Status::Merged => bail!("pull request {} is already merged", short_id(id)),
+        Status::Closed => bail!(
+            "pull request {} is closed; reopen it first",
+            name(repo, id)?
+        ),
+        Status::Merged => bail!("pull request {} is already merged", name(repo, id)?),
     }
     if trust.role(me) < Some(Role::Maintainer) {
         bail!("merging takes a maintainer");
@@ -519,7 +524,12 @@ pub(crate) fn merge_now(repo: &Repository, id: Oid, remote: &str) -> Result<Stri
         done = format!("{} already contains revision {n}; ", p.target);
         tip
     } else {
-        match pr::merge_commit(repo, tip, latest.head, &message(&trust, id, &p, &readiness))? {
+        match pr::merge_commit(
+            repo,
+            tip,
+            latest.head,
+            &message(&trust, id, &name(repo, id)?, &p, &readiness),
+        )? {
             Merging::Conflicts(paths) => bail!(
                 "revision {n} conflicts with {} in:\n  {}\nmerge {} into {} (or rebase), \
                  then `fullgit pr revise`",
@@ -544,7 +554,7 @@ pub(crate) fn merge_now(repo: &Repository, id: Oid, remote: &str) -> Result<Stri
     sync::sync(repo, remote, Some(&signer))?;
     Ok(format!(
         "{done}merged pull request {} into {} as {}; `git pull` brings it here",
-        short_id(id),
+        name(repo, id)?,
         p.target,
         short(commit)
     ))
@@ -584,10 +594,10 @@ pub fn verify(repo: &Repository, branch: Option<String>, remote: &str) -> Result
     std::process::exit(1);
 }
 
-fn message(trust: &Trust, id: Oid, p: &Pr, r: &Readiness) -> String {
+fn message(trust: &Trust, id: Oid, name: &str, p: &Pr, r: &Readiness) -> String {
     let mut m = format!(
         "Merge pull request {}: {}\n\nMerges {} into {}, revision {}.\n\n",
-        short_id(id),
+        name,
         p.title,
         p.source,
         p.target,
@@ -613,22 +623,23 @@ fn set_status(
     let id = pr::resolve(repo, id)?;
     let current = pr::load(repo, trust, id)?.model.status;
     if current == status || current == Status::Merged {
-        bail!("pull request {} is already {current}", short_id(id));
+        bail!("pull request {} is already {current}", name(repo, id)?);
     }
     if let Some(body) = comment {
         pr::comment(repo, trust, &signer, id, &body, Place::General)?;
     }
     pr::set_status(repo, trust, &signer, id, status)?;
-    println!("pull request {} is {status}", short_id(id));
+    println!("pull request {} is {status}", name(repo, id)?);
     Ok(())
 }
 
-fn show(repo: &Repository, trust: &Trust, id: Oid, p: &Pr) {
+fn show(repo: &Repository, trust: &Trust, name: &str, p: &Pr) {
+    let comments = Abbrev::new(p.comments.iter().map(|c| c.id));
     println!("{}", p.title);
     println!(
         "{} · {} · {} → {} · opened by {} on {}",
         p.status,
-        short_id(id),
+        name,
         p.source,
         p.target,
         who(trust, p.author),
@@ -665,12 +676,12 @@ fn show(repo: &Repository, trust: &Trust, id: Oid, p: &Pr) {
                 let c = &p.comments[*n];
                 let tag = format!(
                     "({}{})",
-                    short_id(c.id),
+                    comments.of(c.id),
                     if c.edited { ", edited" } else { "" }
                 );
                 match (&c.location, c.reply_to) {
                     (_, Some(to)) => {
-                        println!("\n── {actor} replied to {}, {when} {tag}", short_id(to));
+                        println!("\n── {actor} replied to {}, {when} {tag}", comments.of(to));
                     }
                     (Some(l), None) => {
                         let old = if l.side == Side::Old { ", old" } else { "" };
@@ -804,6 +815,11 @@ fn find_comment<'a>(p: &'a Pr, prefix: &str) -> Result<&'a pr::Comment> {
         [] => bail!("no comment {prefix} on this pull request"),
         _ => bail!("{prefix} matches several comments"),
     }
+}
+
+/// How a pull request is named: the shortest unique start of its id.
+pub(crate) fn name(repo: &Repository, id: Oid) -> Result<String> {
+    Ok(model::abbrev::<Pr>(repo)?.of(id))
 }
 
 /// Commits in `base..head`.

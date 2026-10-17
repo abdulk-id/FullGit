@@ -48,7 +48,7 @@ fn row(ctx: &Ctx, id: Oid, i: &Issue) -> String {
     format!(
         r#"<div class="row"><span class="dot {st}"></span><div><a class="t" href="/issues/{s}">{t}</a>{labels}<div class="sub">#{s} opened by {who} on {when}{comments}</div></div></div>"#,
         st = i.status.as_str(),
-        s = short(id),
+        s = ctx.issues.of(id),
         t = esc(&i.title),
         who = esc(&ctx.who(i.author)),
         when = date(i.created()),
@@ -127,7 +127,7 @@ pub fn create(ctx: &Ctx, req: &Req) -> Result<Resp> {
         &labels,
     )?;
     Ok(Resp::Redirect(with_param(
-        &format!("/issues/{}", short(id)),
+        &format!("/issues/{}", ctx.issues.of(id)),
         "msg",
         "Opened. Sync shares it.",
     )))
@@ -148,14 +148,14 @@ fn split_labels(s: &str) -> Result<Vec<String>> {
 pub fn show(ctx: &Ctx, req: &Req, id: Oid) -> Result<Resp> {
     let loaded = issue::load(ctx.repo, &ctx.trust, id)?;
     let i = &loaded.model;
-    let here = format!("/issues/{}", short(id));
+    let here = format!("/issues/{}", ctx.issues.of(id));
     let moderates = ctx.moderates(i.author);
     let mut b = String::new();
     let _ = write!(
         b,
         r#"<h1>{} <span class="id">#{}</span></h1><div class="meta">{} {} opened this on {} · {} comment(s)</div>"#,
         esc(&i.title),
-        short(id),
+        ctx.issues.of(id),
         state_badge(i.status.as_str()),
         ctx.person(i.author),
         date(i.created()),
@@ -282,7 +282,7 @@ pub fn show(ctx: &Ctx, req: &Req, id: Oid) -> Result<Resp> {
             b,
             r#"<p class="meta">Ignored {} operation(s) that weren't allowed; <code>fullgit issue show {}</code> lists them.</p>"#,
             loaded.rejected.len(),
-            short(id)
+            ctx.issues.of(id)
         );
     }
     Ok(ctx.page(req, &i.title, b))
@@ -384,7 +384,7 @@ pub fn act(ctx: &Ctx, req: &Req, id: Oid, action: &str) -> Result<Resp> {
     let signer = ctx.signer()?;
     let (repo, trust) = (ctx.repo, &ctx.trust);
     let current = issue::load(repo, trust, id)?.model;
-    let here = format!("/issues/{}", short(id));
+    let here = format!("/issues/{}", ctx.issues.of(id));
     let msg = match action {
         "comment" => {
             let body = req.field("body").unwrap_or_default().trim();

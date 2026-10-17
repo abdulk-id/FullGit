@@ -297,8 +297,10 @@ Commit timestamps are informational only and never used for ordering.
 - Concurrency: operations that change nothing (closing a closed issue) are
   accepted, since concurrent ones overlap; replay order settles the rest,
   e.g. one clone adding a label another removed.
-- Issues are named by a prefix of their id (`db1f1417`). Sequential numbers
-  would need coordination a dumb host can't provide.
+- Issues and pull requests are named by the shortest unique prefix of their
+  id, at least four characters (`db1f`), as git abbreviates commits; a name
+  can grow as more arrive. Sequential numbers would need coordination a
+  dumb host can't provide.
 - CLI: `fullgit issue new/list/show/comment/edit/edit-comment/close/reopen/
   label/assign`; text comes from flags or git's editor. Nothing is shared
   until `fullgit sync`.

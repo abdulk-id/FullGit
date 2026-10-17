@@ -4,6 +4,7 @@ use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use fullgit_core::Trust;
 use fullgit_core::issue::{self, Issue, Status, What};
+use fullgit_core::model::{self, Abbrev};
 use git2::{Oid, Repository};
 
 use crate::{date, me, resolve, short};
@@ -111,7 +112,7 @@ pub fn run(repo: &Repository, cmd: IssueCmd) -> Result<()> {
                 }
             };
             let id = issue::create(repo, &trust, &signer, &title, &body, &labels)?;
-            println!("opened issue {}; `fullgit sync` shares it", short_id(id));
+            println!("opened issue {}; `fullgit sync` shares it", name(repo, id)?);
         }
         IssueCmd::List {
             closed,
@@ -122,12 +123,13 @@ pub fn run(repo: &Repository, cmd: IssueCmd) -> Result<()> {
         } => {
             let assignee = assignee.map(|w| resolve(repo, &trust, &w)).transpose()?;
             let author = author.map(|w| resolve(repo, &trust, &w)).transpose()?;
+            let names = model::abbrev::<Issue>(repo)?;
             let mut shown = Vec::new();
             for (id, loaded) in issue::all(repo, &trust)? {
                 let i = match loaded {
                     Ok(l) => l.model,
                     Err(e) => {
-                        eprintln!("warning: issue {} is invalid: {e}", short_id(id));
+                        eprintln!("warning: issue {} is invalid: {e}", names.of(id));
                         continue;
                     }
                 };
@@ -149,7 +151,7 @@ pub fn run(repo: &Repository, cmd: IssueCmd) -> Result<()> {
                 };
                 println!(
                     "{}  {:<6}  {}{labels}  ({})",
-                    short_id(*id),
+                    names.of(*id),
                     i.status,
                     i.title,
                     who(&trust, i.author)
@@ -162,7 +164,7 @@ pub fn run(repo: &Repository, cmd: IssueCmd) -> Result<()> {
         IssueCmd::Show { id } => {
             let id = issue::resolve(repo, &id)?;
             let loaded = issue::load(repo, &trust, id)?;
-            show(&trust, id, &loaded.model);
+            show(&trust, &name(repo, id)?, &loaded.model);
             if !loaded.rejected.is_empty() {
                 eprintln!();
                 eprintln!("ignored {} operation(s):", loaded.rejected.len());
@@ -272,22 +274,23 @@ fn set_status(
     let (signer, _) = me(repo, trust)?;
     let id = issue::resolve(repo, id)?;
     if issue::load(repo, trust, id)?.model.status == status {
-        bail!("issue {} is already {status}", short_id(id));
+        bail!("issue {} is already {status}", name(repo, id)?);
     }
     if let Some(body) = comment {
         issue::comment(repo, trust, &signer, id, &body)?;
     }
     issue::set_status(repo, trust, &signer, id, status)?;
-    println!("issue {} is {status}", short_id(id));
+    println!("issue {} is {status}", name(repo, id)?);
     Ok(())
 }
 
-fn show(trust: &Trust, id: Oid, i: &Issue) {
+fn show(trust: &Trust, name: &str, i: &Issue) {
+    let comments = Abbrev::new(i.comments.iter().map(|c| c.id));
     println!("{}", i.title);
     println!(
         "{} · {} · opened by {} on {}",
         i.status,
-        short_id(id),
+        name,
         who(trust, i.author),
         date(i.created())
     );
@@ -314,7 +317,7 @@ fn show(trust: &Trust, id: Oid, i: &Issue) {
                 let edited = if c.edited { ", edited" } else { "" };
                 println!(
                     "\n── {actor} commented, {when} ({}{edited})",
-                    short_id(c.id)
+                    comments.of(c.id)
                 );
                 print_indented(&c.body);
             }
@@ -361,6 +364,11 @@ pub(crate) fn who(trust: &Trust, id: Option<Oid>) -> String {
             .map_or_else(|| short(id), |i| i.name.clone()),
         None => "unknown".into(),
     }
+}
+
+/// How an issue is named: the shortest unique start of its id.
+pub(crate) fn name(repo: &Repository, id: Oid) -> Result<String> {
+    Ok(model::abbrev::<Issue>(repo)?.of(id))
 }
 
 pub(crate) fn short_id(id: Oid) -> String {

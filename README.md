@@ -116,9 +116,9 @@ them. `fullgit id add-key` adds another machine's key to your identity.
 fullgit issue new -t "Sync loses ops" -m "Two clones pushing at once." -l bug
 fullgit sync
 fullgit issue list
-fullgit issue show 6de2ae3c            # issues are named by the start of their id
-fullgit issue comment 6de2ae3c -m "Reproduced."
-fullgit issue close 6de2ae3c
+fullgit issue show 6de2                # named by the shortest unique start of their id
+fullgit issue comment 6de2 -m "Reproduced."
+fullgit issue close 6de2
 ```
 
 Leave out `-t` or `-m` and your editor opens.
@@ -140,9 +140,9 @@ A reviewer:
 ```sh
 fullgit sync
 fullgit pr list
-fullgit pr diff da3f9525
-fullgit pr comment da3f9525 --file src/sync.rs --line 12 -m "Back off here?"
-fullgit pr review da3f9525 --request-changes -m "See the comment."
+fullgit pr diff da3f
+fullgit pr comment da3f --file src/sync.rs --line 12 -m "Back off here?"
+fullgit pr review da3f --request-changes -m "See the comment."
 ```
 
 The author adds commits, then records them as the next revision:
@@ -156,9 +156,9 @@ The reviewer sees what changed since they looked, approves, and a
 maintainer merges:
 
 ```sh
-fullgit pr diff da3f9525 --since 1
-fullgit pr review da3f9525 --approve
-fullgit pr merge da3f9525              # merges on the remote, pushes, and records it
+fullgit pr diff da3f --since 1
+fullgit pr review da3f --approve
+fullgit pr merge da3f                  # merges on the remote, pushes, and records it
 git pull
 ```
 

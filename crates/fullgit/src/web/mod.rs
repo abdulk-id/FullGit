@@ -18,6 +18,7 @@ use std::collections::BTreeMap;
 use std::io::Read;
 
 use anyhow::{Context, Result, bail};
+use fullgit_core::model::{self, Abbrev};
 use fullgit_core::sync::{self, Outcome};
 use fullgit_core::{Role, Signer, SshKeygenSigner, Trust, issue, pr};
 use git2::{Oid, Repository};
@@ -134,6 +135,9 @@ pub struct Ctx<'a> {
     pub me: Option<(SshKeygenSigner, Oid)>,
     pub remote: &'a str,
     pub name: String,
+    /// How issues and pull requests are named in URLs and on pages.
+    pub issues: Abbrev,
+    pub prs: Abbrev,
 }
 
 impl Ctx<'_> {
@@ -331,6 +335,8 @@ impl App {
             me,
             remote: &self.remote,
             name,
+            issues: model::abbrev::<issue::Issue>(&repo)?,
+            prs: model::abbrev::<pr::Pr>(&repo)?,
         };
         let parts: Vec<&str> = req
             .path

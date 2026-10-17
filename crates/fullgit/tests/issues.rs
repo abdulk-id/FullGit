@@ -38,6 +38,8 @@ fn issues_are_shared_discussed_and_closed() {
         ],
     );
     let id = out.split_whitespace().nth(2).unwrap().trim_end_matches(';');
+    // Named, like git's commits, by the shortest unique start of the id.
+    assert_eq!(id.len(), 4, "{out}");
     editor(
         &fx,
         &alice,

@@ -210,6 +210,51 @@ pub fn list<M: Model>(repo: &Repository) -> Result<Vec<Oid>> {
     Ok(ids)
 }
 
+/// Shortest unique prefixes of a set of ids, the way git abbreviates
+/// commits: at least [`Abbrev::MIN`] characters, more where ids share a
+/// start. [`resolve`] accepts them.
+#[derive(Debug, Clone, Default)]
+pub struct Abbrev {
+    ids: Vec<String>,
+}
+
+impl Abbrev {
+    pub const MIN: usize = 4;
+
+    pub fn new(ids: impl IntoIterator<Item = Oid>) -> Self {
+        let mut ids: Vec<String> = ids.into_iter().map(|id| id.to_string()).collect();
+        ids.sort();
+        ids.dedup();
+        Abbrev { ids }
+    }
+
+    /// `id`'s prefix: one character past what it shares with any other id.
+    pub fn of(&self, id: Oid) -> String {
+        let id = id.to_string();
+        let at = self.ids.partition_point(|x| *x < id);
+        let shared = |x: &String| {
+            x.bytes()
+                .zip(id.bytes())
+                .take_while(|(a, b)| a == b)
+                .count()
+        };
+        let neighbours = [at.checked_sub(1), Some(at), Some(at + 1)];
+        let len = neighbours
+            .into_iter()
+            .flatten()
+            .filter_map(|i| self.ids.get(i))
+            .filter(|x| **x != id)
+            .map(|x| shared(x) + 1)
+            .fold(Self::MIN, usize::max);
+        id[..len.min(id.len())].to_owned()
+    }
+}
+
+/// Abbreviations for all local entities of this type.
+pub fn abbrev<M: Model>(repo: &Repository) -> Result<Abbrev> {
+    Ok(Abbrev::new(list::<M>(repo)?))
+}
+
 /// Resolves a full id or a unique hex prefix (at least 4 characters).
 pub fn resolve<M: Model>(repo: &Repository, prefix: &str) -> Result<Oid> {
     let prefix = prefix.to_ascii_lowercase();
@@ -232,4 +277,22 @@ fn nonce() -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
     format!("{:x}{:x}", t.as_nanos(), std::process::id())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn abbreviations_are_short_and_unique() {
+        let id = |s: &str| Oid::from_str(&format!("{s:0<40}")).unwrap();
+        let a = Abbrev::new([id("ea14358c"), id("ea15"), id("6a43"), id("ea14359")]);
+        assert_eq!(a.of(id("6a43")), "6a43");
+        assert_eq!(a.of(id("ea15")), "ea15");
+        assert_eq!(a.of(id("ea14358c")), "ea14358");
+        assert_eq!(a.of(id("ea14359")), "ea14359");
+        // Not in the set: still unique against it.
+        assert_eq!(a.of(id("ea1435")), "ea14350");
+        assert_eq!(Abbrev::default().of(id("12345678")), "1234");
+    }
 }

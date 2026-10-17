@@ -79,14 +79,21 @@ pub fn fetch(repo: &Repository, remote: &str) -> Result<()> {
 /// forcing. Returns `false` if the remote rejected any ref (e.g. someone
 /// else pushed first); the caller should fetch and merge again.
 pub fn push(repo: &Repository, remote: &str, skip: &[&str]) -> Result<bool> {
-    let mut specs = Vec::new();
+    let mut names = Vec::new();
     for r in repo.references_glob(&format!("{}*", refs::PREFIX))? {
         if let Ok(name) = r?.name()
             && !skip.contains(&name)
         {
-            specs.push(format!("{name}:{name}"));
+            names.push(name.to_owned());
         }
     }
+    push_refs(repo, remote, &names)
+}
+
+/// Pushes the named local refs to the same names, without forcing. Returns
+/// `false` if the remote rejected any.
+pub fn push_refs(repo: &Repository, remote: &str, names: &[String]) -> Result<bool> {
+    let specs: Vec<String> = names.iter().map(|n| format!("{n}:{n}")).collect();
     if specs.is_empty() {
         return Ok(true);
     }

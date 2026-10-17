@@ -1,7 +1,6 @@
-//! `fullgit secret`, plus the filter, diff and hook entry points git calls.
+//! `fullgit secret`, plus the filter and diff entry points git calls.
 
 use std::collections::BTreeMap;
-use std::io::BufRead;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -9,7 +8,7 @@ use clap::Subcommand;
 use fullgit_core::filter::{self, SecretFilter};
 use fullgit_core::secret::{self, DecryptionKey, Rekeyed, Sealed};
 use fullgit_core::{Signer, Trust, sign};
-use git2::{Oid, Repository};
+use git2::Repository;
 
 use crate::signer;
 
@@ -157,57 +156,6 @@ pub fn textconv(repo: &Repository, file: &Path) -> Result<()> {
     Ok(())
 }
 
-/// `fullgit hook <name>`, called by the hooks `fullgit init` installs.
-pub fn hook(repo: &Repository, name: &str, args: &[String]) -> Result<()> {
-    match name {
-        "pre-commit" => {
-            let unsealed = secret::unsealed_in_index(repo)?;
-            if !unsealed.is_empty() {
-                eprintln!("fullgit: refusing to commit unencrypted secrets:");
-                for p in &unsealed {
-                    eprintln!("  {p}");
-                }
-                eprintln!(
-                    "is the filter configured? run `fullgit init`, then `git add` them again"
-                );
-                std::process::exit(1);
-            }
-        }
-        "pre-push" => {
-            let remote = args.first().map(String::as_str).unwrap_or("origin");
-            let tracking = format!("refs/remotes/{remote}/*");
-            let mut found = Vec::new();
-            for line in std::io::stdin().lock().lines() {
-                let line = line?;
-                let fields: Vec<&str> = line.split_whitespace().collect();
-                let [_, local, remote_ref, remote_oid] = fields[..] else {
-                    continue;
-                };
-                let local = Oid::from_str(local)?;
-                if local.is_zero() || remote_ref.starts_with(fullgit_core::refs::PREFIX) {
-                    continue; // a deletion, or fullgit's own refs
-                }
-                let hide = [Oid::from_str(remote_oid)?];
-                found.extend(secret::unsealed_in_commits(
-                    repo,
-                    local,
-                    &hide,
-                    &[&tracking],
-                )?);
-            }
-            if !found.is_empty() {
-                eprintln!("fullgit: refusing to push commits with unencrypted secrets:");
-                for (commit, path) in &found {
-                    eprintln!("  {} {path}", &commit.to_string()[..12]);
-                }
-                std::process::exit(1);
-            }
-        }
-        other => bail!("unknown hook {other}"),
-    }
-    Ok(())
-}
-
 /// Fingerprint → who held that key, for messages.
 fn key_owners(trust: &Trust) -> BTreeMap<String, String> {
     let mut names = BTreeMap::new();
@@ -221,7 +169,7 @@ fn key_owners(trust: &Trust) -> BTreeMap<String, String> {
 
 /// `path` (relative to the current directory) relative to the repository
 /// root, with `/` separators. The file needn't exist.
-fn repo_relative(repo: &Repository, path: &Path) -> Result<String> {
+pub(crate) fn repo_relative(repo: &Repository, path: &Path) -> Result<String> {
     let workdir = repo.workdir().context("a bare repository has no secrets")?;
     let workdir = workdir.canonicalize()?;
     let absolute = std::env::current_dir()?.canonicalize()?.join(path);

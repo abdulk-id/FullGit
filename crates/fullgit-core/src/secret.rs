@@ -121,20 +121,7 @@ impl Sealed {
     }
 
     pub fn open(&self, key: &DecryptionKey) -> Result<Vec<u8>, String> {
-        let decryptor =
-            age::Decryptor::new(age::armor::ArmoredReader::new(self.armored.as_bytes()))
-                .map_err(|e| format!("invalid ciphertext: {e}"))?;
-        let mut reader = decryptor
-            .decrypt(std::iter::once(&key.identity as &dyn age::Identity))
-            .map_err(|e| match e {
-                age::DecryptError::NoMatchingKeys => "not encrypted to your key".to_owned(),
-                e => e.to_string(),
-            })?;
-        let mut plaintext = Vec::new();
-        reader
-            .read_to_end(&mut plaintext)
-            .map_err(|e| e.to_string())?;
-        Ok(plaintext)
+        decrypt(&self.armored, key)
     }
 }
 
@@ -165,6 +152,22 @@ pub fn recipients(trust: &Trust, group: &str) -> Result<Vec<KeyData>> {
 /// Encrypts `plaintext` to `group` and signs it.
 pub fn seal(trust: &Trust, signer: &dyn Signer, group: &str, plaintext: &[u8]) -> Result<Sealed> {
     let keys = recipients(trust, group)?;
+    let armored = encrypt(&keys, plaintext)?;
+    let mut signed = format!("{MAGIC}\ngroup: {group}\n");
+    for k in &keys {
+        signed.push_str(&format!("recipient: {}\n", sign::fingerprint(k)));
+    }
+    signed.push_str(&armored);
+    if !signed.ends_with('\n') {
+        signed.push('\n');
+    }
+    let signature = signer.sign_as(SIGNATURE_NAMESPACE, signed.as_bytes())?;
+    let bytes = format!("{signed}{signature}");
+    Sealed::parse(bytes.as_bytes()).map_err(|e| Error::Signature(format!("sealed badly: {e}")))
+}
+
+/// Age-encrypts `plaintext` to SSH `keys`, armored.
+pub fn encrypt(keys: &[KeyData], plaintext: &[u8]) -> Result<String> {
     let age_recipients = keys
         .iter()
         .map(|k| {
@@ -181,18 +184,24 @@ pub fn seal(trust: &Trust, signer: &dyn Signer, group: &str, plaintext: &[u8]) -
     let mut writer = encryptor.wrap_output(armor)?;
     writer.write_all(plaintext)?;
     writer.finish()?.finish()?;
+    Ok(String::from_utf8(armored).expect("age armor is ASCII"))
+}
 
-    let mut signed = format!("{MAGIC}\ngroup: {group}\n");
-    for k in &keys {
-        signed.push_str(&format!("recipient: {}\n", sign::fingerprint(k)));
-    }
-    signed.push_str(std::str::from_utf8(&armored).expect("age armor is ASCII"));
-    if !signed.ends_with('\n') {
-        signed.push('\n');
-    }
-    let signature = signer.sign_as(SIGNATURE_NAMESPACE, signed.as_bytes())?;
-    let bytes = format!("{signed}{signature}");
-    Sealed::parse(bytes.as_bytes()).map_err(|e| Error::Signature(format!("sealed badly: {e}")))
+/// Decrypts what [`encrypt`] produced.
+pub fn decrypt(armored: &str, key: &DecryptionKey) -> Result<Vec<u8>, String> {
+    let decryptor = age::Decryptor::new(age::armor::ArmoredReader::new(armored.as_bytes()))
+        .map_err(|e| format!("invalid ciphertext: {e}"))?;
+    let mut reader = decryptor
+        .decrypt(std::iter::once(&key.identity as &dyn age::Identity))
+        .map_err(|e| match e {
+            age::DecryptError::NoMatchingKeys => "not encrypted to your key".to_owned(),
+            e => e.to_string(),
+        })?;
+    let mut plaintext = Vec::new();
+    reader
+        .read_to_end(&mut plaintext)
+        .map_err(|e| e.to_string())?;
+    Ok(plaintext)
 }
 
 /// A private SSH key that can decrypt secrets. Passphrase-protected keys are
@@ -306,65 +315,6 @@ pub fn entries(repo: &Repository) -> Result<Vec<Entry>> {
                 group,
                 blob: e.id,
             });
-        }
-    }
-    Ok(out)
-}
-
-/// Secrets in the index that are not sealed, e.g. because the filter wasn't
-/// configured when they were added. Committing them would leak them.
-pub fn unsealed_in_index(repo: &Repository) -> Result<Vec<String>> {
-    let mut out = Vec::new();
-    for e in entries(repo)? {
-        if !Sealed::is_sealed(repo.find_blob(e.blob)?.content()) {
-            out.push(e.path);
-        }
-    }
-    Ok(out)
-}
-
-/// Secrets committed unsealed in the commits reachable from `tip` but not
-/// from `hide` (refs or globs, e.g. what the remote already has). Each
-/// commit is compared with its first parent; secrets are recognized by the
-/// current `.gitattributes`.
-pub fn unsealed_in_commits(
-    repo: &Repository,
-    tip: Oid,
-    hide: &[Oid],
-    hide_globs: &[&str],
-) -> Result<Vec<(Oid, String)>> {
-    let mut walk = repo.revwalk()?;
-    walk.push(tip)?;
-    for id in hide {
-        // The remote may know commits we don't.
-        if repo.find_commit(*id).is_ok() {
-            walk.hide(*id)?;
-        }
-    }
-    for glob in hide_globs {
-        walk.hide_glob(glob)?;
-    }
-    let mut out = Vec::new();
-    for id in walk {
-        let commit = repo.find_commit(id?)?;
-        let tree = commit.tree()?;
-        let parent = match commit.parents().next() {
-            Some(p) => Some(p.tree()?),
-            None => None,
-        };
-        let diff = repo.diff_tree_to_tree(parent.as_ref(), Some(&tree), None)?;
-        for delta in diff.deltas() {
-            let file = delta.new_file();
-            let (Some(path), false) = (file.path(), file.id().is_zero()) else {
-                continue;
-            };
-            let flags = git2::AttrCheckFlags::FILE_THEN_INDEX;
-            if repo.get_attr(path, "filter", flags)? != Some(DRIVER) {
-                continue;
-            }
-            if !Sealed::is_sealed(repo.find_blob(file.id())?.content()) {
-                out.push((commit.id(), path.display().to_string()));
-            }
         }
     }
     Ok(out)
@@ -496,18 +446,25 @@ pub fn mark(repo: &Repository, path: &str, group: &str) -> Result<PathBuf> {
     let pattern = format!("/{path}");
     let line = format!("{pattern} filter={DRIVER} diff={DRIVER} -merge -text {GROUP_ATTR}={group}");
     let file = workdir.join(".gitattributes");
-    let existing = match std::fs::read_to_string(&file) {
+    replace_line(&file, &pattern, &line)?;
+    Ok(file)
+}
+
+/// Replaces the line for `pattern` in a `.gitattributes`-style `file` with
+/// `line`, or appends it.
+pub(crate) fn replace_line(file: &Path, pattern: &str, line: &str) -> Result<()> {
+    let existing = match std::fs::read_to_string(file) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(e.into()),
     };
     let mut lines: Vec<&str> = existing
         .lines()
-        .filter(|l| l.split_whitespace().next() != Some(&pattern))
+        .filter(|l| l.split_whitespace().next() != Some(pattern))
         .collect();
-    lines.push(&line);
-    std::fs::write(&file, lines.join("\n") + "\n")?;
-    Ok(file)
+    lines.push(line);
+    std::fs::write(file, lines.join("\n") + "\n")?;
+    Ok(())
 }
 
 /// Whether `HEAD` holds `path` unsealed: its values are then in history in

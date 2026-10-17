@@ -1,69 +1,17 @@
 //! Phase 3, end to end: the `fullgit` binary as git's filter, diff driver
 //! and hooks, across clones of one remote.
 
-#[path = "../../fullgit-core/tests/common/mod.rs"]
-mod common;
+mod cli;
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-use common::{Fixture, git, keygen};
+use cli::common::{Fixture, git};
+use cli::{fg, fg_ok, read, run, user};
 
 const MAGIC: &str = "fullgit-secret v1";
 
-struct Out {
-    ok: bool,
-    stdout: String,
-    stderr: String,
-}
-
-fn run(dir: &Path, program: &str, args: &[&str]) -> Out {
-    let out = Command::new(program)
-        .current_dir(dir)
-        .args(args)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .output()
-        .unwrap();
-    Out {
-        ok: out.status.success(),
-        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-    }
-}
-
-fn fg(dir: &Path, args: &[&str]) -> Out {
-    run(dir, env!("CARGO_BIN_EXE_fullgit"), args)
-}
-
-fn fg_ok(dir: &Path, args: &[&str]) -> String {
-    let out = fg(dir, args);
-    assert!(
-        out.ok,
-        "fullgit {args:?} failed:\n{}{}",
-        out.stdout, out.stderr
-    );
-    out.stdout
-}
-
-fn read(path: &Path) -> String {
-    std::fs::read_to_string(path).unwrap()
-}
-
 fn is_sealed(path: &Path) -> bool {
     read(path).starts_with(MAGIC)
-}
-
-/// A clone with its own key and identity, set up with `fullgit init`.
-fn user(fx: &Fixture, remote: &Path, name: &str) -> PathBuf {
-    let (path, _) = fx.clone(remote, name);
-    let key = keygen(fx.dir.path(), name);
-    git(&path, &["config", "user.signingkey", key.to_str().unwrap()]);
-    fg_ok(&path, &["init"]);
-    let email = format!("{name}@example.com");
-    fg_ok(&path, &["id", "create", "--name", name, "--email", &email]);
-    fg_ok(&path, &["sync"]);
-    path
 }
 
 struct Team {
@@ -190,8 +138,7 @@ fn unencrypted_secrets_are_neither_committed_nor_pushed() {
     let out = run(alice, "git", &["commit", "-q", "-m", "oops"]);
     assert!(!out.ok, "pre-commit should refuse");
     assert!(
-        out.stderr
-            .contains("refusing to commit unencrypted secrets"),
+        out.stderr.contains(".env (unencrypted secret)"),
         "{}",
         out.stderr
     );

@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use fullgit_core::secret::{self, DecryptionKey, Sealed};
-use fullgit_core::{Signer, Trust, policy, refs, setup, sign};
+use fullgit_core::{Signer, Trust, local, policy, refs, setup, sign};
 use git2::Repository;
 
 use crate::{me, role_name};
@@ -133,6 +133,36 @@ pub fn run(repo: &Repository) -> Result<()> {
             && std::fs::read(dir.join(&e.path)).is_ok_and(|c| Sealed::is_sealed(&c))
         {
             r.warn(format!("{} is still encrypted in the working tree", e.path));
+        }
+    }
+
+    let declared = local::declared(repo)?;
+    for p in &declared.tracked {
+        r.fail(format!(
+            "{p} is a per-user file tracked by git; run `git rm --cached {p}`"
+        ));
+    }
+    for p in &declared.files {
+        if !repo.is_path_ignored(p)? {
+            r.warn(format!(
+                "{p} is a per-user file but not ignored; add it to .gitignore"
+            ));
+        }
+    }
+    if let Some(trust) = &trust
+        && let Ok((_, me)) = me(repo, trust)
+    {
+        let history = local::history(repo, trust, me)?;
+        let state = local::state(repo, me)?;
+        let files = local::collect(repo, &declared.files)?;
+        if history.head.is_some() && history.head != state.base {
+            r.warn("per-user files were saved from another device; run `fullgit local restore`");
+        } else if local::hashes(&files) != state.files {
+            r.warn(
+                "per-user files changed since saved; `fullgit local save` or `git push` saves them",
+            );
+        } else if !files.is_empty() {
+            r.ok(format!("{} per-user file(s) saved", files.len()));
         }
     }
 

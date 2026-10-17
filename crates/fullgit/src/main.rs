@@ -6,8 +6,8 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use fullgit_core::sync::{self, Outcome};
 use fullgit_core::{
-    Identity, Role, Signer, SshKeygenSigner, Trust, model, policy, refs, remote, secret, setup,
-    sign,
+    Identity, Role, Signer, SshKeygenSigner, Trust, local, model, policy, refs, remote, secret,
+    setup, sign,
 };
 use git2::{Oid, Repository};
 
@@ -45,6 +45,9 @@ enum Cmd {
     /// Secret files, encrypted to a policy group.
     #[command(subcommand)]
     Secret(commands::secret::SecretCmd),
+    /// Per-user files, kept in your own encrypted snapshot.
+    #[command(subcommand)]
+    Local(commands::local::LocalCmd),
     /// Check this clone's setup.
     Doctor,
     /// Low-level commands for inspecting and writing operation logs.
@@ -101,14 +104,25 @@ fn main() -> Result<()> {
                 }
             }
             println!("synced with {remote}");
+            if let Ok(trust) = Trust::load_identities(&repo)
+                && let Ok((_, me)) = me(&repo, &trust)
+                && let Ok(head) = repo.refname_to_id(&local::refname(me))
+                && local::state(&repo, me)?.base != Some(head)
+            {
+                println!(
+                    "your per-user files were saved from another device; \
+                     `fullgit local restore` brings them here"
+                );
+            }
         }
         Cmd::Id(cmd) => commands::id::run(&repo, cmd)?,
         Cmd::Policy(cmd) => commands::policy::run(&repo, cmd)?,
         Cmd::Secret(cmd) => commands::secret::run(&repo, cmd)?,
+        Cmd::Local(cmd) => commands::local::run(&repo, cmd)?,
         Cmd::Doctor => commands::doctor::run(&repo)?,
         Cmd::FilterProcess => commands::secret::filter_process(&repo)?,
         Cmd::Textconv { file } => commands::secret::textconv(&repo, &file)?,
-        Cmd::Hook { name, args } => commands::secret::hook(&repo, &name, &args)?,
+        Cmd::Hook { name, args } => commands::hook::run(&repo, &name, &args)?,
         Cmd::Debug(DebugCmd::Append {
             refname,
             kind,

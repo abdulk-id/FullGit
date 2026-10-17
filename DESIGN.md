@@ -1,6 +1,6 @@
 # FullGit — design
 
-Status: **draft, Phase 4**.
+Status: **draft, Phase 5**.
 
 ## Goals
 
@@ -230,22 +230,46 @@ Commit timestamps are informational only and never used for ordering.
 
 ## Per-user files
 
-- Declared in `.gitattributes` with `fullgit-local`, and also listed in
-  `.gitignore` (`fullgit local add` writes both):
+- Declared with the `fullgit-local` attribute and ignored by git;
+  `fullgit local add <path>` writes both:
 
   ```
-  mise.local.toml  fullgit-local
+  # .gitattributes             # .gitignore
+  /mise.local.toml fullgit-local   /mise.local.toml
   ```
 
-- **One snapshot per user**, not per branch. `fullgit local save` collects the
-  matching files from the working tree into one archive, encrypts it to the
-  user's own keys only (all their devices), and commits it signed to
-  `refs/fullgit/users/<my-id>/local`. Encrypting a single archive also hides
-  the file names. Earlier snapshots stay in the ref's history for rollback.
-- `fullgit local restore` decrypts the latest snapshot into the working tree.
-  It refuses to overwrite locally modified files without `--force`.
-- Hooks: `post-checkout` restores missing files after a fresh clone;
-  `pre-push` saves when the files have changed.
+  Hand-written patterns (`*.local.toml fullgit-local`) work too, in the root
+  `.gitattributes` or `$GIT_DIR/info/attributes`.
+- **One snapshot per user**, not per branch. `fullgit local save` packs the
+  declared files into one archive, encrypts it to the user's current keys
+  (all their devices), and appends it as a signed `local.save {sealed,
+  recipients}` operation to `refs/fullgit/users/<identity>/local`. One
+  archive hides the file names too. Only operations signed by a key of that
+  identity count; anything else on the ref is ignored. Earlier snapshots stay
+  in the ref's history: `fullgit local log`, `restore --from <id>`.
+- Each clone records in `$GIT_DIR/fullgit/local.json` the ref head it last
+  saved to or restored from (its *base*) and what that snapshot held:
+  - `save` refuses if the ref moved past the base (another device saved),
+    unless `--force`. Concurrent saves that meet in `sync` merge like any
+    entity; the later one in replay order is current, and both devices are
+    then behind.
+  - `restore` overwrites a file only if it is unchanged since the base,
+    unless `--force`; otherwise it reports a conflict and keeps the base.
+    Files missing locally are written; local files the snapshot lacks are
+    left alone (deletions don't propagate).
+  - `save` is a no-op when nothing changed, unless the identity's keys did:
+    saving after adding a device's key re-encrypts for it.
+- Hooks: `pre-push` saves when the files changed and pushes the snapshot
+  ref (pushes of `refs/fullgit/*` alone don't, so `sync` doesn't recurse).
+  `pre-commit` and `pre-push` refuse per-user files in commits. `fullgit sync`
+  says when another device saved; restoring is explicit, as it may prompt
+  for the key's passphrase. A `post-checkout` hook was planned for fresh
+  clones, but hooks only exist after `fullgit init`, so `sync` points there
+  instead.
+- Limits: per-user files inside directories git ignores wholesale are still
+  found (`git ls-files --others`), but the lookup walks them, so huge ignored
+  trees slow `local` commands and `git push` down. A removed key can still
+  open the snapshots saved before its removal; only later ones exclude it.
 
 ## Issues
 
@@ -287,7 +311,7 @@ Commit timestamps are informational only and never used for ordering.
 | 1. Engine | Entity library, deterministic replay, `sync` | done (2026-10-17) |
 | 2. Identity + policy | `init`, `id`, roles, validation, revocation | done (2026-10-17) |
 | 3. Secrets | Filter driver, age, guards, `rekey` | done (2026-10-17) |
-| 4. Per-user files | `local add/save/restore`, hooks | |
+| 4. Per-user files | `local add/save/restore`, hooks | done (2026-10-17) |
 | 5. Issues | CLI: create, list, show, comment, close | |
 | 6. PRs + review | Revisions, line comments, approvals, merge | |
 | 7. UX + reach | TUI or local web UI, GitHub/GitLab bridge, server hook | |

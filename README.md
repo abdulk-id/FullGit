@@ -1,7 +1,6 @@
 # fullgit
 
-Issues, pull requests, permissions, secrets and per-user files that travel
-with your git repository, on any git host.
+Issues, pull requests, permissions, secrets and per-user files that travel with your git repository.
 
 Clone the repository and you have all of it: the issues and their
 discussions, pull requests with their reviews, who may do what, the
@@ -251,7 +250,3 @@ the hooks and the secret filter record where it is.
 `fullgit help` lists them, and `fullgit help <command>` explains each:
 `init`, `sync`, `id`, `policy`, `issue`, `pr`, `secret`, `local`, `web`,
 `verify`, `doctor`.
-
-## License
-
-MIT or Apache-2.0, at your option.

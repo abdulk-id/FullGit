@@ -35,7 +35,8 @@ pub fn run(repo: &Repository, name: &str, args: &[String]) -> Result<()> {
         }
         "pre-push" => {
             let remote = args.first().map(String::as_str).unwrap_or("origin");
-            let tracking = format!("refs/remotes/{remote}/*");
+            let branches = format!("refs/remotes/{remote}/*");
+            let ours = format!("{}*", refs::remote_tracking_prefix(remote));
             let mut found = Vec::new();
             let mut pushes_branches = false;
             for line in std::io::stdin().lock().lines() {
@@ -52,7 +53,7 @@ pub fn run(repo: &Repository, name: &str, args: &[String]) -> Result<()> {
                 }
                 pushes_branches |= !code;
                 let hide = [Oid::from_str(remote_oid)?];
-                found.extend(guard::in_commits(repo, local, &hide, &[&tracking])?);
+                found.extend(guard::in_commits(repo, local, &hide, &[&branches, &ours])?);
             }
             if !found.is_empty() {
                 eprintln!("fullgit: refusing to push commits with:");

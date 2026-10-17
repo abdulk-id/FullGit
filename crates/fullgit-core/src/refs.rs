@@ -12,13 +12,25 @@ pub fn qualify(name: &str) -> String {
     }
 }
 
-/// Where `git fetch <remote>` stores the remote's `refs/fullgit/*`.
+/// Where `git fetch <remote>` stores the remote's `refs/fullgit/*`. Not
+/// under `refs/remotes/`: git and the tools around it list everything
+/// there as a remote branch.
 pub fn remote_tracking_prefix(remote: &str) -> String {
-    format!("refs/remotes/{remote}/fullgit/")
+    format!("refs/fullgit-remotes/{remote}/")
 }
 
 pub fn fetch_refspec(remote: &str) -> String {
     format!("+{PREFIX}*:{}*", remote_tracking_prefix(remote))
+}
+
+/// Where earlier versions stored them, which showed as remote branches
+/// named `fullgit/...`.
+pub fn legacy_tracking_prefix(remote: &str) -> String {
+    format!("refs/remotes/{remote}/fullgit/")
+}
+
+pub fn legacy_fetch_refspec(remote: &str) -> String {
+    format!("+{PREFIX}*:{}*", legacy_tracking_prefix(remote))
 }
 
 pub const PUSH_REFSPEC: &str = "refs/fullgit/*:refs/fullgit/*";

@@ -89,7 +89,8 @@ Commit timestamps are informational only and never used for ordering.
 ### Sync
 
 - `fullgit init` adds the fetch refspec
-  `+refs/fullgit/*:refs/remotes/<remote>/fullgit/*`. It deliberately does **not**
+  `+refs/fullgit/*:refs/fullgit-remotes/<remote>/*`, outside `refs/remotes/`
+  so the refs don't show as remote branches. It deliberately does **not**
   add a push refspec: setting `remote.<name>.push` changes what a bare
   `git push` pushes.
 - `fullgit sync [<remote>]`: fetch, then for each entity:

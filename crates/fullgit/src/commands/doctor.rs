@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use fullgit_core::secret::{self, DecryptionKey, Sealed};
-use fullgit_core::{Signer, Trust, local, policy, refs, setup, sign};
+use fullgit_core::{Signer, Trust, local, policy, refs, remote, setup, sign};
 use git2::Repository;
 
 use crate::{me, role_name};
@@ -29,13 +29,12 @@ pub fn run(repo: &Repository) -> Result<()> {
     let mut r = Report::default();
 
     for name in repo.remotes()?.iter().flatten().flatten() {
-        let spec = refs::fetch_refspec(name);
-        let has = repo
-            .find_remote(name)?
-            .fetch_refspecs()?
-            .iter()
-            .any(|s| matches!(s, Ok(Some(s)) if s == spec));
-        if has {
+        if remote::is_legacy(repo, name)? {
+            r.warn(format!(
+                "remote {name} fetches refs/fullgit/* as remote branches named fullgit/...; \
+                 run `fullgit init {name}` to move them out of the branch list"
+            ));
+        } else if remote::has_refspec(repo, name, &refs::fetch_refspec(name))? {
             r.ok(format!("remote {name} fetches refs/fullgit/*"));
         } else {
             r.warn(format!(

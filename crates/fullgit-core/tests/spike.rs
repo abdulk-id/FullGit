@@ -210,7 +210,7 @@ fn ops_survive_push_and_fetch_through_bare_remote() {
     );
     let bob = Repository::open(&bob_path).unwrap();
     assert!(
-        bob.refname_to_id("refs/remotes/origin/fullgit/issues/t")
+        bob.refname_to_id("refs/fullgit-remotes/origin/issues/t")
             .is_err()
     );
 
@@ -222,7 +222,7 @@ fn ops_survive_push_and_fetch_through_bare_remote() {
     git(&bob_path, &["fetch", "-q", "origin"]);
 
     let fetched = bob
-        .refname_to_id("refs/remotes/origin/fullgit/issues/t")
+        .refname_to_id("refs/fullgit-remotes/origin/issues/t")
         .unwrap();
     assert_eq!(fetched, head);
     let ops = load(&bob, &[fetched]).unwrap();

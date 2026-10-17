@@ -1,6 +1,6 @@
 # FullGit — design
 
-Status: **draft, Phase 5**.
+Status: **draft, Phase 6**.
 
 ## Goals
 
@@ -273,11 +273,25 @@ Commit timestamps are informational only and never used for ordering.
 
 ## Issues
 
-- State: title, body, status (open/closed), labels, assignees, comments.
-- Ops: `issue.create`, `issue.edit`, `issue.comment`, `issue.comment_edit`,
-  `issue.label`, `issue.assign`, `issue.status`.
-- Permissions: contributors create and comment; the author or a maintainer
-  edits and closes.
+- State: title, description, author, status (open/closed), labels,
+  assignees, comments, and a timeline of what happened.
+- Ops: `issue.create {title, body, labels?}`, `issue.edit {title?, body?}`,
+  `issue.comment {body}`, `issue.comment_edit {comment, body}`,
+  `issue.label {add?, remove?}`, `issue.assign {add?, remove?}`,
+  `issue.status {status}`.
+- Permissions: contributors open issues and comment. The author or a
+  maintainer edits, labels, assigns, closes and reopens. A comment is edited
+  only by its author. Losing a role (a revoke) stops further operations;
+  those the revoker had seen stay.
+- Concurrency: operations that change nothing (closing a closed issue) are
+  accepted, since concurrent ones overlap; replay order settles the rest,
+  e.g. one clone adding a label another removed.
+- Issues are named by a prefix of their id (`db1f1417`). Sequential numbers
+  would need coordination a dumb host can't provide.
+- CLI: `fullgit issue new/list/show/comment/edit/edit-comment/close/reopen/
+  label/assign`; text comes from flags or git's editor. Nothing is shared
+  until `fullgit sync`.
+- Times are commit times, from each author's clock.
 
 ## Pull requests
 
@@ -312,7 +326,7 @@ Commit timestamps are informational only and never used for ordering.
 | 2. Identity + policy | `init`, `id`, roles, validation, revocation | done (2026-10-17) |
 | 3. Secrets | Filter driver, age, guards, `rekey` | done (2026-10-17) |
 | 4. Per-user files | `local add/save/restore`, hooks | done (2026-10-17) |
-| 5. Issues | CLI: create, list, show, comment, close | |
+| 5. Issues | CLI: create, list, show, comment, close | done (2026-10-17) |
 | 6. PRs + review | Revisions, line comments, approvals, merge | |
 | 7. UX + reach | TUI or local web UI, GitHub/GitLab bridge, server hook | |
 

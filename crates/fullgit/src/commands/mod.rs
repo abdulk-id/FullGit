@@ -3,6 +3,7 @@
 pub mod doctor;
 pub mod hook;
 pub mod id;
+pub mod issue;
 pub mod local;
 pub mod policy;
 pub mod secret;

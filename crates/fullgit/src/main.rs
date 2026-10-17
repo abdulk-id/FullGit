@@ -15,7 +15,7 @@ use git2::{Oid, Repository};
 #[command(
     name = "fullgit",
     version,
-    about = "Issues, PRs, permissions and secrets that travel with your git repo"
+    about = "Issues, PRs, permissions, secrets and per-user files that travel with your git repo"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -48,6 +48,9 @@ enum Cmd {
     /// Per-user files, kept in your own encrypted snapshot.
     #[command(subcommand)]
     Local(commands::local::LocalCmd),
+    /// Issues.
+    #[command(subcommand)]
+    Issue(commands::issue::IssueCmd),
     /// Check this clone's setup.
     Doctor,
     /// Low-level commands for inspecting and writing operation logs.
@@ -119,6 +122,7 @@ fn main() -> Result<()> {
         Cmd::Policy(cmd) => commands::policy::run(&repo, cmd)?,
         Cmd::Secret(cmd) => commands::secret::run(&repo, cmd)?,
         Cmd::Local(cmd) => commands::local::run(&repo, cmd)?,
+        Cmd::Issue(cmd) => commands::issue::run(&repo, cmd)?,
         Cmd::Doctor => commands::doctor::run(&repo)?,
         Cmd::FilterProcess => commands::secret::filter_process(&repo)?,
         Cmd::Textconv { file } => commands::secret::textconv(&repo, &file)?,
@@ -258,4 +262,34 @@ pub(crate) fn describe(trust: &Trust, id: Oid) -> String {
 
 pub(crate) fn short(id: Oid) -> String {
     id.to_string()[..12].to_owned()
+}
+
+/// `YYYY-MM-DD HH:MM UTC` for a Unix time.
+pub(crate) fn date(secs: i64) -> String {
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // Howard Hinnant's civil_from_days.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02} UTC",
+        rem / 3600,
+        rem % 3600 / 60
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn formats_dates() {
+        assert_eq!(super::date(0), "1970-01-01 00:00 UTC");
+        assert_eq!(super::date(1_792_238_400), "2026-10-17 12:00 UTC");
+        assert_eq!(super::date(951_782_400), "2000-02-29 00:00 UTC");
+    }
 }

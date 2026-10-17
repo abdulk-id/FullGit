@@ -5,6 +5,7 @@ pub mod entity;
 pub mod filter;
 pub mod guard;
 pub mod identity;
+pub mod issue;
 pub mod local;
 pub mod model;
 pub mod op;
@@ -20,6 +21,7 @@ pub mod trust;
 
 pub use entity::{Merged, append, load, merge};
 pub use identity::Identity;
+pub use issue::Issue;
 pub use model::{Ctx, Model};
 pub use op::{Op, StoredOp, read_op, write_op};
 pub use policy::Policy;

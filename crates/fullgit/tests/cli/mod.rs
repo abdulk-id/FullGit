@@ -21,6 +21,7 @@ pub fn run(dir: &Path, program: &str, args: &[&str]) -> Out {
         .args(args)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env_remove("GIT_EDITOR")
         .output()
         .unwrap();
     Out {

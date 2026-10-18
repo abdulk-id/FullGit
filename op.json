@@ -1,8 +1,8 @@
 {
   "v": 1,
   "type": "policy.label_add",
-  "lamport": 3,
+  "lamport": 4,
   "payload": {
-    "label": "testing"
+    "label": "feature"
   }
 }

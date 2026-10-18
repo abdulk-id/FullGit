@@ -1,8 +1,8 @@
 {
   "v": 1,
-  "type": "issue.comment",
-  "lamport": 2,
+  "type": "issue.status",
+  "lamport": 3,
   "payload": {
-    "body": "Implemented in commit d8884dd"
+    "status": "closed"
   }
 }

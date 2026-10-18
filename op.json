@@ -1,13 +1,8 @@
 {
   "v": 1,
-  "type": "issue.create",
-  "lamport": 1,
+  "type": "issue.comment",
+  "lamport": 2,
   "payload": {
-    "body": "Currently the web UI asks for key unlocks itself. And trying to take protected actions show a custom banner near the top saying the key is locked.\r\n\r\nReplace both the key unlock prompt and the error banner with browser-native popups",
-    "labels": [
-      "feature"
-    ],
-    "nonce": "18dfa90d52acc9a7198c16",
-    "title": "Use browser native popups for key unlocking"
+    "body": "Implemented in commit d8884dd"
   }
 }

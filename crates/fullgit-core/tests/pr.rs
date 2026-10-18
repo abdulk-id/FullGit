@@ -219,8 +219,15 @@ fn code_travels_with_sync_and_must_match_its_name() {
     let remote = fx.bare("remote.git");
     let (pa, ra) = fx.clone(&remote, "a");
     let (_, rb) = fx.clone(&remote, "b");
-    let (sa, _) = person(&ra, &fx, "alice");
-    let (sb, _) = person(&rb, &fx, "bob");
+    let (sa, a) = person(&ra, &fx, "alice");
+    let (sb, b) = person(&rb, &fx, "bob");
+    sync(&ra, "origin", Some(&sa)).unwrap();
+    sync(&rb, "origin", Some(&sb)).unwrap();
+    sync(&ra, "origin", Some(&sa)).unwrap();
+    let root = policy::genesis(&ra, &trust(&ra), &sa, &[a, b]).unwrap();
+    policy::pin(&rb, root).unwrap();
+    sync(&ra, "origin", Some(&sa)).unwrap();
+    sync(&rb, "origin", Some(&sb)).unwrap();
 
     let base = commit(&pa, "a", "1\n");
     let head = commit(&pa, "a", "2\n");

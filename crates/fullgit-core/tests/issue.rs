@@ -200,13 +200,19 @@ fn concurrent_changes_converge() {
     let remote = fx.bare("remote.git");
     let (_, ra) = fx.clone(&remote, "a");
     let (_, rb) = fx.clone(&remote, "b");
-    let (sa, _) = person(&ra, &fx, "alice");
-    let (sb, _) = person(&rb, &fx, "bob");
+    let (sa, a) = person(&ra, &fx, "alice");
+    let (sb, b) = person(&rb, &fx, "bob");
     let sync_all = || {
         for (repo, s) in [(&ra, &sa), (&rb, &sb), (&ra, &sa)] {
             sync(repo, "origin", Some(s)).unwrap();
         }
     };
+    sync_all();
+    let root = policy::genesis(&ra, &trust(&ra), &sa, &[a, b]).unwrap();
+    for l in ["ci", "tests"] {
+        policy::label_add(&ra, &trust(&ra), &sa, l).unwrap();
+    }
+    policy::pin(&rb, root).unwrap();
     sync_all();
     let id = issue::create(&ra, &trust(&ra), &sa, "Flaky test", "", &[]).unwrap();
     sync_all();

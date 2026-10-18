@@ -459,6 +459,7 @@ pub fn load(repo: &Repository, trust: &Trust, id: Oid) -> Result<Loaded<Issue>> 
 /// Every local issue, or why it failed to load (e.g. its opening operation
 /// was rejected).
 pub fn all(repo: &Repository, trust: &Trust) -> Result<Vec<(Oid, Result<Loaded<Issue>>)>> {
+    model::needs_policy::<Issue>(trust)?;
     Ok(model::list::<Issue>(repo)?
         .into_iter()
         .map(|id| (id, load(repo, trust, id)))

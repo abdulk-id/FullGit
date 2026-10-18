@@ -18,6 +18,10 @@ pub trait Model: Default {
     /// Ref namespace under `refs/fullgit/`, e.g. `issues`.
     const NAMESPACE: &'static str;
 
+    /// Whether this kind of entity exists only under a policy. Identities
+    /// and the policy itself don't: the policy is made from them.
+    const NEEDS_POLICY: bool = true;
+
     /// Applies one operation. `op.parents.is_empty()` marks the root.
     /// Returning `Err` rejects the operation, and must leave the state
     /// unchanged. Every replica rejects the same operations, so state stays
@@ -78,6 +82,7 @@ pub fn create<M: Model>(
 ) -> Result<Oid> {
     // Two identical creations in the same second would otherwise produce the
     // same commit, and so the same entity.
+    needs_policy::<M>(trust)?;
     if let Some(obj) = payload.as_object_mut() {
         obj.insert("nonce".into(), nonce().into());
     }
@@ -106,6 +111,7 @@ pub fn update<M: Model>(
     kind: &str,
     payload: serde_json::Value,
 ) -> Result<Oid> {
+    needs_policy::<M>(trust)?;
     let mut current = load::<M>(repo, trust, id)?;
     let op_id = write_op(repo, signer, &[current.head], kind, payload)?;
     let op = crate::op::read_op(repo, op_id)?;
@@ -132,7 +138,16 @@ pub fn update<M: Model>(
     Ok(op_id)
 }
 
+/// Fails if `M` needs a policy and the repository has none.
+pub fn needs_policy<M: Model>(trust: &Trust) -> Result<()> {
+    match M::NEEDS_POLICY && trust.policy.is_none() {
+        true => Err(Error::NoPolicy),
+        false => Ok(()),
+    }
+}
+
 pub fn load<M: Model>(repo: &Repository, trust: &Trust, id: Oid) -> Result<Loaded<M>> {
+    needs_policy::<M>(trust)?;
     let head = repo
         .refname_to_id(&refname::<M>(id))
         .map_err(|_| Error::NotFound(id.to_string()))?;

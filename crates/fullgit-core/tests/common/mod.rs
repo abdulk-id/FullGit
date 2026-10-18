@@ -11,7 +11,8 @@ use git2::Repository;
 use tempfile::TempDir;
 
 /// A minimal entity: one last-writer-wins value and a grow-only tag set.
-/// Contributors set the value; tagging takes a maintainer.
+/// Under a policy, contributors set the value and tagging takes a
+/// maintainer; without one, anyone may, so sync can be tested alone.
 #[derive(Debug, Default, PartialEq)]
 pub struct Register {
     pub value: String,
@@ -20,6 +21,7 @@ pub struct Register {
 
 impl Model for Register {
     const NAMESPACE: &'static str = "registers";
+    const NEEDS_POLICY: bool = false;
 
     fn apply(&mut self, op: &StoredOp, ctx: &Ctx) -> Result<(), String> {
         let needs = if op.op.kind == "reg.tag" {
@@ -27,7 +29,9 @@ impl Model for Register {
         } else {
             Role::Contributor
         };
-        ctx.actor(op).require(needs)?;
+        if ctx.trust.policy.is_some() {
+            ctx.actor(op).require(needs)?;
+        }
         let field = |k: &str| {
             op.op.payload[k]
                 .as_str()

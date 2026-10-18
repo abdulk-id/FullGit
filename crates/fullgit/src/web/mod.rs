@@ -426,6 +426,9 @@ impl App {
             .filter(|p| !p.is_empty())
             .collect();
         let post = req.method == Method::Post;
+        if ctx.trust.policy.is_none() && !matches!((post, parts.as_slice()), (true, ["sync"])) {
+            return Ok(no_policy(&ctx, req));
+        }
         match (post, parts.as_slice()) {
             (false, []) => home(&ctx, req),
             (true, ["sync"]) => sync_now(&ctx, req),
@@ -449,6 +452,20 @@ impl App {
     }
 }
 
+/// Every page, until the repository has a policy.
+fn no_policy(ctx: &Ctx, req: &Req) -> Resp {
+    let body = r#"<div class="box"><div class="hd"><b>Set up fullgit</b></div><div class="bd pad">
+<p>This repository has no policy yet. Issues and pull requests need one: it says who may do what. To create it, with you as its owner, run:</p>
+<pre>fullgit policy init
+git add .fullgit/root
+git commit -m "Adopt fullgit"
+git push
+fullgit sync</pre>
+<p>If someone else has set it up, <code>git pull</code> and <code>fullgit init</code>, then sync.</p>
+</div></div>"#;
+    ctx.page(req, "Set up", body.into())
+}
+
 /// The overview: what's open, and who may do what.
 fn home(ctx: &Ctx, req: &Req) -> Result<Resp> {
     let mut body = String::new();
@@ -470,9 +487,6 @@ fn people(ctx: &Ctx) -> String {
         );
     }
     let policy = ctx.trust.policy.as_ref().map(|(_, p)| p);
-    if policy.is_none() {
-        s.push_str("<p>No policy: everyone may do everything. <code>fullgit policy init</code> creates one.</p>");
-    }
     s.push_str(
         r#"<table class="people"><tr><th>Name</th><th>Email</th><th>Role</th><th>Keys</th></tr>"#,
     );

@@ -3,7 +3,7 @@
 mod cli;
 
 use cli::common::{Fixture, git};
-use cli::{fg, fg_ok, user};
+use cli::{adopt, fg, fg_ok, user};
 
 /// The remote's refs live outside `refs/remotes/`, so git doesn't list
 /// them as branches; `fullgit init` moves a clone set up the old way.
@@ -12,6 +12,7 @@ fn the_remotes_refs_are_not_branches() {
     let fx = Fixture::new();
     let remote = fx.bare("remote.git");
     let alice = user(&fx, &remote, "alice");
+    adopt(&alice, &[]);
     fg_ok(&alice, &["issue", "new", "-t", "Hello", "-m", "Hi"]);
     fg_ok(&alice, &["sync"]);
     let branches = git(&alice, &["branch", "-r"]);

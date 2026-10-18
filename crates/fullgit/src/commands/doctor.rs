@@ -72,7 +72,10 @@ pub fn run(repo: &Repository) -> Result<()> {
             (Some((root, _)), None) => r.warn(format!(
                 "policy {root} is not pinned; run `fullgit init` to pin it"
             )),
-            (None, _) => r.warn("no policy: nothing is restricted, and secrets are unavailable"),
+            (None, _) => r.fail(
+                "no policy: issues, pull requests and secrets need one; \
+                 `fullgit policy init` creates it",
+            ),
         }
         for (id, why) in &trust.invalid {
             r.warn(format!("identity {id} is invalid: {why}"));

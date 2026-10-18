@@ -122,7 +122,10 @@ Commit timestamps are informational only and never used for ordering.
 - **Which policy to trust** is pinned. The genesis id is committed to the main tree as `.fullgit/root`. `fullgit init`
   records it in the clone's config as `fullgit.root` (trust on first use). Afterwards a different committed root is
   refused until the user changes `fullgit.root` themselves, so pushing a new policy with yourself as owner doesn't work.
-- Without a policy, nothing is restricted: every signer acts as an owner.
+- A policy is required. Without one, nobody holds a role: clients refuse to create or load issues and pull requests,
+  `fullgit doctor` fails, and the web UI only explains how to make one. Identities and the policy itself don't need
+  one, since the policy is made from them. Setting up fullgit is meant to follow `git init` directly, and a project
+  that drops fullgit deletes `.fullgit/root`.
 - Roles: `owner` > `maintainer` > `contributor` > `reader`. Groups are named sets of identities, e.g. `secrets:prod`.
 - Ops: `policy.grant {identity, role, keep?}`, `policy.revoke {identity, keep}`, `policy.group_add {group, identity}`,
   `policy.group_remove`, `policy.label_add {label}`, `policy.label_remove {label}`. Only owners change the policy,
@@ -239,7 +242,7 @@ Commit timestamps are informational only and never used for ordering.
 - Labels come from a fixed list in the policy, kept by maintainers. Clients refuse to add a label it doesn't list.
   Replay doesn't check labels, since the list may have changed since; instead, loading an issue sets aside labels the
   list no longer holds, so a removed label vanishes from its issues (timelines still mention it) and returns if it is
-  listed again. Without a policy, any label goes.
+  listed again.
 - Concurrency: operations that change nothing (closing a closed issue) are accepted, since concurrent ones overlap;
   replay order settles the rest, e.g. one clone adding a label another removed.
 - Issues and pull requests are named by the shortest unique prefix of their id, at least four characters (`db1f`), as

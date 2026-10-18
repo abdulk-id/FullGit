@@ -54,6 +54,12 @@ pub enum Error {
     Ambiguous(String),
     #[error("policy: {0}")]
     Policy(String),
+    /// Issues and pull requests need a policy, and there is none.
+    #[error(
+        "this repository has no policy yet; `fullgit policy init` creates one, \
+         with you as its owner"
+    )]
+    NoPolicy,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

@@ -217,7 +217,10 @@ fn init(repo: &Repository, remote: &str) -> Result<()> {
                 policy::ROOT_FILE
             );
         }
-        (None, None) => println!("no policy yet; `fullgit policy init` creates one"),
+        (None, None) => println!(
+            "no policy yet; issues and pull requests need one. \
+             `fullgit id create`, then `fullgit policy init`, creates it"
+        ),
     }
 
     let exe = std::env::current_exe()?;

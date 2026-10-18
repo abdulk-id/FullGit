@@ -8,7 +8,7 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
 use cli::common::{Fixture, git};
-use cli::{fg_ok, user};
+use cli::{adopt, fg_ok, user};
 
 struct Server {
     child: Child,
@@ -199,10 +199,16 @@ fn only_the_token_holder_gets_in() {
         "title=pwned",
     );
     assert_eq!(forged.status, 403);
-    assert_eq!(fg_ok(&alice, &["issue", "list", "--all"]), "no issues\n");
+    assert_eq!(git(&alice, &["for-each-ref", "refs/fullgit/issues/"]), "");
 
+    // Without a policy, every page says how to make one.
     let home = s.get("/");
-    assert!(home.body.contains("alice@example.com"), "{}", home.body);
+    assert!(
+        home.body.contains("Set up fullgit") && home.body.contains("fullgit policy init"),
+        "{}",
+        home.body
+    );
+    assert!(s.get("/issues").body.contains("Set up fullgit"));
     let csp = home.header("Content-Security-Policy");
     assert!(
         csp.contains("default-src 'none'") && !csp.contains("script"),
@@ -422,6 +428,7 @@ fn a_locked_key_is_unlocked_in_the_browser() {
     let fx = Fixture::new();
     let remote = fx.bare("remote.git");
     let alice = user(&fx, &remote, "alice");
+    adopt(&alice, &[]);
     let key = fx.dir.path().join("id_alice");
     let locked = Command::new("ssh-keygen")
         .args(["-q", "-p", "-P", "", "-N", "s3cret", "-f"])

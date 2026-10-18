@@ -136,8 +136,8 @@ impl Actor {
 
 /// Identities and the policy, loaded once and consulted for every operation.
 ///
-/// Without a policy (no `.fullgit/root` and no `fullgit.root`), nothing is
-/// restricted: every signer acts as an owner.
+/// Without a policy (no `.fullgit/root` and no `fullgit.root`), nobody
+/// holds a role: issues and pull requests need a policy.
 #[derive(Default)]
 pub struct Trust {
     pub identities: BTreeMap<Oid, Identity>,
@@ -162,7 +162,7 @@ impl Trust {
         Ok(trust)
     }
 
-    /// Loads the identities only; nothing is restricted.
+    /// Loads the identities only, without the policy.
     pub fn load_identities(repo: &Repository) -> Result<Self> {
         let mut trust = Self::default();
         let mut identities = BTreeMap::new();
@@ -192,10 +192,7 @@ impl Trust {
     }
 
     pub fn role(&self, identity: Oid) -> Option<Role> {
-        match &self.policy {
-            Some((_, p)) => p.role(identity),
-            None => Some(Role::Owner),
-        }
+        self.policy.as_ref().and_then(|(_, p)| p.role(identity))
     }
 
     pub fn actor(&self, repo: &Repository, entity: Oid, op: &crate::StoredOp) -> Actor {
@@ -228,19 +225,13 @@ pub fn actor(
         if !identity.signs(repo, &op.signer, entity, op.id) {
             continue;
         }
-        let role = match policy {
-            Some(p) => p.role_for(repo, *id, entity, op.id),
-            None => Some(Role::Owner),
-        };
+        let role = policy.and_then(|p| p.role_for(repo, *id, entity, op.id));
         if best.identity.is_none() || role > best.role {
             best = Actor {
                 identity: Some(*id),
                 role,
             };
         }
-    }
-    if policy.is_none() {
-        best.role = Some(Role::Owner);
     }
     best
 }

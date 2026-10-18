@@ -61,7 +61,8 @@ ssh-add ~/.ssh/id_ed25519
 
 ### Set up a repository
 
-The first person creates an identity and the policy, which makes them the owner:
+The first person creates an identity and the policy, which makes them the owner. Issues and pull requests need a
+policy, so do this first, ideally right after `git init`:
 
 ```sh
 fullgit init                           # in your clone; fetches fullgit's refs, installs hooks

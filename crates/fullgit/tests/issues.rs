@@ -6,7 +6,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use cli::common::{Fixture, git};
-use cli::{fg, fg_ok, user};
+use cli::{adopt, fg, fg_ok, user};
 
 /// Makes `dir`'s git editor write `text` into the file it's given.
 fn editor(fx: &Fixture, dir: &Path, text: &str) {
@@ -23,6 +23,10 @@ fn issues_are_shared_discussed_and_closed() {
     let alice = user(&fx, &remote, "alice");
     let bob = user(&fx, &remote, "bob");
     fg_ok(&alice, &["sync"]);
+    adopt(&alice, &[(&bob, "maintainer")]);
+    fg_ok(&alice, &["policy", "label", "add", "bug"]);
+    fg_ok(&alice, &["sync"]);
+    fg_ok(&bob, &["sync"]);
 
     let out = fg_ok(
         &alice,
@@ -117,4 +121,33 @@ fn labels_are_kept_in_the_policy() {
     fg_ok(&alice, &["policy", "label", "remove", "docs"]);
     let show = fg_ok(&alice, &["issue", "show", id]);
     assert!(!show.contains("labels:"), "{show}");
+}
+
+#[test]
+fn issues_and_pull_requests_need_a_policy() {
+    let fx = Fixture::new();
+    let remote = fx.bare("remote.git");
+    let alice = user(&fx, &remote, "alice");
+    for args in [
+        &["issue", "new", "-t", "Hi", "-m", "There"][..],
+        &["issue", "list"],
+        &["pr", "list"],
+    ] {
+        let out = fg(&alice, args);
+        assert!(
+            !out.ok && out.stderr.contains("no policy yet; `fullgit policy init`"),
+            "{args:?}: {}",
+            out.stderr
+        );
+    }
+    let doctor = fg(&alice, &["doctor"]);
+    assert!(
+        !doctor.ok && doctor.stdout.contains("FAIL  no policy"),
+        "{}",
+        doctor.stdout
+    );
+
+    adopt(&alice, &[]);
+    fg_ok(&alice, &["issue", "new", "-t", "Hi", "-m", "There"]);
+    assert!(fg_ok(&alice, &["issue", "list"]).contains("Hi"));
 }

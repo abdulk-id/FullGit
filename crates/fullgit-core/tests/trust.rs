@@ -143,8 +143,14 @@ fn roles_gate_operations() {
     let bob = new_identity(&repo, &sb, "bob");
     new_identity(&repo, &sc, "carol");
 
-    // Without a policy nothing is restricted.
-    create_register(&repo, &stranger, "anyone").unwrap();
+    // Without a policy, there are no issues.
+    let refused = fullgit_core::issue::create(&repo, &trust(&repo), &sa, "Hi", "", &[]);
+    assert!(matches!(refused, Err(Error::NoPolicy)), "{refused:?}");
+    assert!(
+        model::list::<fullgit_core::Issue>(&repo)
+            .unwrap()
+            .is_empty()
+    );
 
     // Only an owner listed in the genesis can sign it.
     assert!(policy::genesis(&repo, &trust(&repo), &sb, &[alice]).is_err());

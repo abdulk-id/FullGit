@@ -732,6 +732,7 @@ pub fn load(repo: &Repository, trust: &Trust, id: Oid) -> Result<Loaded<Pr>> {
 
 /// Every local pull request, or why it failed to load.
 pub fn all(repo: &Repository, trust: &Trust) -> Result<Vec<(Oid, Result<Loaded<Pr>>)>> {
+    model::needs_policy::<Pr>(trust)?;
     Ok(model::list::<Pr>(repo)?
         .into_iter()
         .map(|id| (id, load(repo, trust, id)))

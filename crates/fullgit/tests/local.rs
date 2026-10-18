@@ -6,7 +6,7 @@ mod cli;
 use std::path::{Path, PathBuf};
 
 use cli::common::{Fixture, git, keygen};
-use cli::{fg, fg_ok, read, run, user};
+use cli::{adopt, fg, fg_ok, read, run, user};
 
 /// Another clone for an existing person: its own key, no identity yet.
 fn device(fx: &Fixture, remote: &Path, name: &str) -> PathBuf {
@@ -139,6 +139,7 @@ fn per_user_files_follow_their_owner_across_devices() {
 fn per_user_files_are_neither_committed_nor_pushed() {
     let (fx, remote) = remote();
     let alice = user(&fx, &remote, "alice");
+    adopt(&alice, &[]);
     std::fs::write(alice.join(FILE), "TOKEN = 1\n").unwrap();
     fg_ok(&alice, &["local", "add", FILE]);
     git(&alice, &["add", ".gitattributes", ".gitignore"]);

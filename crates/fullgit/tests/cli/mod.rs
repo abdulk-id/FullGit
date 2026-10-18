@@ -60,3 +60,27 @@ pub fn user(fx: &Fixture, remote: &Path, name: &str) -> PathBuf {
     fg_ok(&path, &["sync"]);
     path
 }
+
+/// Adopts fullgit as the README does: `owner` creates the policy and pushes
+/// it as `master`, and grants each of `members` a role, by the email
+/// `user` gave them. Every clone ends up trusting the policy.
+pub fn adopt(owner: &Path, members: &[(&Path, &str)]) {
+    fg_ok(owner, &["policy", "init"]);
+    git(owner, &["add", ".fullgit/root"]);
+    git(owner, &["commit", "-q", "-m", "Adopt fullgit"]);
+    git(owner, &["push", "-q", "origin", "HEAD:master"]);
+    fg_ok(owner, &["sync"]);
+    for (dir, role) in members {
+        let name = dir.file_name().unwrap().to_str().unwrap();
+        fg_ok(
+            owner,
+            &["policy", "grant", &format!("{name}@example.com"), role],
+        );
+    }
+    fg_ok(owner, &["sync"]);
+    for (dir, _) in members {
+        git(dir, &["pull", "-q", "origin", "master"]);
+        fg_ok(dir, &["init"]);
+        fg_ok(dir, &["sync"]);
+    }
+}

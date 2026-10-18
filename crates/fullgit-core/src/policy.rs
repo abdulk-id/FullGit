@@ -109,6 +109,7 @@ impl Policy {
 
 impl Model for Policy {
     const NAMESPACE: &'static str = "policy";
+    const NEEDS_POLICY: bool = false;
 
     fn apply(&mut self, op: &StoredOp, ctx: &Ctx) -> Result<(), String> {
         let p = &op.op.payload;

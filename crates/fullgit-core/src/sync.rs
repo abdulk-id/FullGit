@@ -2,7 +2,10 @@
 //! into the local copy, and push. Never force-pushes, and never moves a
 //! local ref backwards.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use git2::{Oid, Repository};
@@ -206,13 +209,95 @@ pub(crate) fn git(repo: &Repository, args: &[&str]) -> Result<()> {
     }
 }
 
-pub(crate) fn git_output(repo: &Repository, args: &[&str]) -> Result<std::process::Output> {
-    Ok(Command::new("git")
-        .arg("--git-dir")
-        .arg(repo.path())
-        .args(args)
-        .output()?)
+/// A passphrase `ssh` and `ssh-keygen` should take from a program instead of
+/// the terminal. Held across the git commands of one web request.
+#[derive(Clone)]
+struct ActivePassphrase {
+    passphrase: OsString,
+    askpass: PathBuf,
 }
+
+thread_local! {
+    static ACTIVE: RefCell<Option<ActivePassphrase>> = const { RefCell::new(None) };
+}
+
+/// While this value is held, git subprocesses on this thread give
+/// `passphrase` to `ssh` and `ssh-keygen` instead of reading it from the
+/// terminal, which would hang a browser waiting on `fullgit web`.
+pub struct PassphraseGuard {
+    prev: Option<ActivePassphrase>,
+    _dir: tempfile::TempDir,
+}
+
+impl PassphraseGuard {
+    pub fn activate(passphrase: &str) -> Result<Self> {
+        let dir = tempfile::tempdir()?;
+        let askpass = install_askpass(dir.path())?;
+        let prev = ACTIVE.with(|active| {
+            active.replace(Some(ActivePassphrase {
+                passphrase: passphrase.into(),
+                askpass,
+            }))
+        });
+        Ok(Self { prev, _dir: dir })
+    }
+}
+
+impl Drop for PassphraseGuard {
+    fn drop(&mut self) {
+        ACTIVE.with(|active| *active.borrow_mut() = self.prev.take());
+    }
+}
+
+/// Prints `FULLGIT_PASSPHRASE`. ssh executes this when a key needs one.
+fn install_askpass(dir: &Path) -> Result<PathBuf> {
+    let path = dir.join("askpass");
+    std::fs::write(&path, "#!/bin/sh\nprintf '%s\\n' \"$FULLGIT_PASSPHRASE\"\n")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(path)
+}
+
+pub(crate) fn git_output(repo: &Repository, args: &[&str]) -> Result<std::process::Output> {
+    let mut cmd = Command::new("git");
+    cmd.arg("--git-dir").arg(repo.path()).args(args);
+    if let Some(active) = ACTIVE.with(|active| active.borrow().clone()) {
+        // `force` so ssh never falls back to the terminal this server was
+        // started from. No controlling terminal either, for an ssh that
+        // ignores the variable.
+        cmd.env("FULLGIT_PASSPHRASE", &active.passphrase);
+        cmd.env("SSH_ASKPASS", &active.askpass);
+        cmd.env("SSH_ASKPASS_REQUIRE", "force");
+        cmd.env("GIT_TERMINAL_PROMPT", "0");
+        if std::env::var_os("DISPLAY").is_none() {
+            cmd.env("DISPLAY", ":0");
+        }
+        detach_terminal(&mut cmd);
+    }
+    Ok(cmd.output()?)
+}
+
+#[cfg(unix)]
+fn detach_terminal(cmd: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    unsafe {
+        cmd.pre_exec(|| {
+            let _ = setsid();
+            Ok(())
+        });
+    }
+}
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn setsid() -> i32;
+}
+
+#[cfg(not(unix))]
+fn detach_terminal(_cmd: &mut Command) {}
 
 pub(crate) fn git_error(what: &str, out: &std::process::Output) -> Error {
     Error::Git(git2::Error::from_str(&format!(

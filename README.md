@@ -224,7 +224,8 @@ Opens a local web UI with the overview, issues, pull requests, people, diffs wit
 merging. It serves only your machine, and only to whoever has the URL it prints.
 
 If your key has a passphrase and isn't in `ssh-agent`, the page asks for it once. The server keeps the key unlocked in
-memory until it stops, or until you press "Lock key".
+memory until it stops, or until you press "Lock key". Sync and merge use that key, and don't ask for it on the
+terminal.
 
 ### When something's off
 

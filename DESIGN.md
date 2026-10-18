@@ -307,8 +307,10 @@ Commit timestamps are informational only and never used for ordering.
 - What users wrote is escaped; markdown is rendered with raw HTML shown as text, and links keep only http(s), mailto
   and relative targets. Remote https images do load.
 - Secrets in a diff show as "encrypted secret", not as armored text.
-- Requests are handled one at a time, and signing runs `ssh-keygen`: a passphrase-protected key needs `ssh-agent`, or
-  the request waits for the passphrase on the server's terminal.
+- Requests are handled one at a time. A passphrase-protected key that ssh-agent doesn't hold is unlocked from the
+  page and kept in memory until the server stops or the key is locked again; the server never reads a passphrase
+  from its terminal. Signing uses that key in-process. Sync, fetch and push give the same passphrase to ssh through
+  a program, so a protected key doesn't hang the browser.
 
 ## Implementation
 

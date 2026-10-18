@@ -4,8 +4,10 @@ mod cli;
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::time::Duration;
 
 use cli::common::{Fixture, git};
 use cli::{adopt, fg_ok, user};
@@ -78,6 +80,10 @@ fn encode(s: &str) -> String {
 impl Server {
     fn raw(&self, method: &str, path: &str, headers: &[(&str, &str)], body: &str) -> Reply {
         let mut stream = TcpStream::connect(("127.0.0.1", self.port)).unwrap();
+        // A passphrase prompt on the server's terminal would hang this read.
+        stream
+            .set_read_timeout(Some(Duration::from_secs(60)))
+            .unwrap();
         let mut req = format!("{method} {path} HTTP/1.1\r\nConnection: close\r\n");
         for (k, v) in headers {
             req.push_str(&format!("{k}: {v}\r\n"));
@@ -445,6 +451,9 @@ fn a_locked_key_is_unlocked_in_the_browser() {
     );
     let to = s.post("/issues/new", &[("back", "/issues/new"), ("title", "Hi")]);
     assert!(to.contains("err=your%20key%20is%20locked"), "{to}");
+    // Sync used to ask ssh for the passphrase on the server's terminal.
+    let to = s.post("/sync", &[("back", "/")]);
+    assert!(to.contains("err=your%20key%20is%20locked"), "{to}");
 
     let to = s.post("/unlock", &[("back", "/issues"), ("passphrase", "guess")]);
     assert!(to.starts_with("/issues?err=wrong%20passphrase"), "{to}");
@@ -460,9 +469,79 @@ fn a_locked_key_is_unlocked_in_the_browser() {
     assert!(to.contains("msg=Opened"), "{to}");
     // Signed with the key, so every clone accepts it.
     assert!(fg_ok(&alice, &["issue", "list"]).contains("Hi"));
+    let to = s.post("/sync", &[("back", "/")]);
+    assert!(to.contains("msg=Synced"), "{to}");
 
     s.post("/lock", &[("back", "/")]);
     assert!(s.get("/").body.contains(r#"action="/unlock""#));
+}
+
+/// Sync over ssh takes the passphrase from the page, not from a terminal.
+#[test]
+fn sync_over_ssh_uses_the_passphrase_from_the_page() {
+    let fx = Fixture::new();
+    let remote = fx.bare("remote.git");
+    let alice = user(&fx, &remote, "alice");
+    adopt(&alice, &[]);
+    let key = fx.dir.path().join("id_alice");
+    let locked = Command::new("ssh-keygen")
+        .args(["-q", "-p", "-P", "", "-N", "s3cret", "-f"])
+        .arg(&key)
+        .status()
+        .unwrap();
+    assert!(locked.success());
+
+    let script = fx.dir.path().join("fake-ssh");
+    std::fs::write(
+        &script,
+        r#"#!/bin/bash
+set -euo pipefail
+if true </dev/tty 2>/dev/null; then
+  echo "ssh can still read the terminal" >&2
+  exit 1
+fi
+if [[ "${SSH_ASKPASS_REQUIRE:-}" != force ]]; then
+  echo "SSH_ASKPASS_REQUIRE=${SSH_ASKPASS_REQUIRE:-unset}" >&2
+  exit 1
+fi
+got=$("${SSH_ASKPASS:?}" "Enter passphrase")
+if [[ "$got" != "s3cret" ]]; then
+  echo "askpass returned the wrong passphrase" >&2
+  exit 1
+fi
+remote_cmd="${@: -1}"
+case "$remote_cmd" in
+  "git-upload-pack "*|"git-receive-pack "*)
+    tool="${remote_cmd%% *}"
+    tool="${tool#git-}"
+    path="${remote_cmd#* }"
+    path="${path#\'}"
+    path="${path%\'}"
+    exec git "$tool" "$path"
+    ;;
+  *)
+    echo "unexpected remote command: $remote_cmd" >&2
+    exit 1
+    ;;
+esac
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let url = format!("ssh://git@example.invalid{}", remote.display());
+    git(&alice, &["remote", "set-url", "origin", &url]);
+    git(
+        &alice,
+        &["config", "core.sshCommand", script.to_str().unwrap()],
+    );
+
+    let s = start(&alice);
+    let to = s.post("/sync", &[("back", "/")]);
+    assert!(to.contains("err=your%20key%20is%20locked"), "{to}");
+    let to = s.post("/unlock", &[("back", "/"), ("passphrase", "s3cret")]);
+    assert!(to.contains("msg=Key%20unlocked"), "{to}");
+    let to = s.post("/sync", &[("back", "/")]);
+    assert!(to.contains("msg=Synced"), "{to}");
 }
 
 /// People leave the overview, which then splits issues and pull requests,

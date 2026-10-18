@@ -10,7 +10,8 @@
 //! The server never asks for a passphrase on its terminal, where nobody
 //! is looking: a key that needs one, and that ssh-agent doesn't hold, is
 //! unlocked from the page and kept in memory until the server stops, as
-//! ssh-agent would keep it.
+//! ssh-agent would keep it. Sync and merge give that passphrase to ssh,
+//! which would otherwise read it from the terminal and hang the browser.
 //!
 //! Requests are served one at a time. GETs never change anything; each
 //! POST does one thing and redirects back, with a message.
@@ -91,7 +92,16 @@ struct App {
     port: u16,
     remote: String,
     /// Your key, decrypted with the passphrase given on a page.
-    unlocked: RefCell<Option<KeySigner>>,
+    unlocked: RefCell<Option<Unlocked>>,
+}
+
+/// A key decrypted from the page, and the passphrase ssh still needs in
+/// order to read the key file itself. `passphrase` is set only when the
+/// file is encrypted.
+#[derive(Clone)]
+struct Unlocked {
+    key: KeySigner,
+    passphrase: Option<String>,
 }
 
 /// One parsed request.
@@ -149,6 +159,8 @@ pub struct Ctx<'a> {
     pub unlocked: bool,
     /// Your key's file, to say which passphrase is wanted.
     pub key_name: String,
+    /// Passphrase the page unlocked the key with, when ssh would ask for it.
+    pub passphrase: Option<String>,
     pub remote: &'a str,
     pub name: String,
     /// How issues and pull requests are named in URLs and on pages.
@@ -339,13 +351,17 @@ impl App {
             *self.unlocked.borrow_mut() = None;
             "Key locked."
         } else {
-            let key = crate::signer(repo)?
-                .unlock(req.field("passphrase").unwrap_or_default())
-                .map_err(|e| match e {
-                    fullgit_core::Error::Signature(why) => anyhow::anyhow!(why),
-                    e => e.into(),
-                })?;
-            *self.unlocked.borrow_mut() = Some(key);
+            let ssh = crate::signer(repo)?;
+            let encrypted = ssh.needs_passphrase();
+            let passphrase = req.field("passphrase").unwrap_or_default();
+            let key = ssh.unlock(passphrase).map_err(|e| match e {
+                fullgit_core::Error::Signature(why) => anyhow::anyhow!(why),
+                e => e.into(),
+            })?;
+            *self.unlocked.borrow_mut() = Some(Unlocked {
+                key,
+                passphrase: encrypted.then(|| passphrase.to_owned()),
+            });
             "Key unlocked until the server stops."
         };
         Ok(Resp::Redirect(with_param(back_of(req), "msg", msg)))
@@ -397,12 +413,14 @@ impl App {
             })
             .unwrap_or_default();
         let unlocked = self.unlocked.borrow().clone();
-        let (signer, unlocked): (Option<Box<dyn Signer>>, bool) = match (key, unlocked) {
-            (Some(k), Some(u)) if u.public_key() == k.public_key() => (Some(Box::new(u)), true),
-            // Signing would ask on the terminal.
-            (Some(k), _) if k.needs_passphrase() => (None, false),
-            (Some(k), _) => (Some(Box::new(k)), false),
-            (None, _) => (None, false),
+        let (signer, unlocked, passphrase) = match (key, unlocked) {
+            (Some(k), Some(u)) if u.key.public_key() == k.public_key() => {
+                (Some(Box::new(u.key) as Box<dyn Signer>), true, u.passphrase)
+            }
+            // Signing, or ssh during sync, would ask on the terminal.
+            (Some(k), _) if k.needs_passphrase() => (None, false, None),
+            (Some(k), _) => (Some(Box::new(k) as Box<dyn Signer>), false, None),
+            (None, _) => (None, false, None),
         };
         let name = self
             .repo_path
@@ -415,6 +433,7 @@ impl App {
             signer,
             unlocked,
             key_name,
+            passphrase,
             remote: &self.remote,
             name,
             issues: model::abbrev::<issue::Issue>(&repo)?,
@@ -479,6 +498,12 @@ fn home(ctx: &Ctx, req: &Req) -> Result<Resp> {
 }
 
 fn sync_now(ctx: &Ctx, req: &Req) -> Result<Resp> {
+    // ssh would read the passphrase from the terminal and hang the browser.
+    // The page already asks for it; refuse until it has been given.
+    if ctx.locked() {
+        bail!("your key is locked; unlock it with its passphrase first");
+    }
+    let _pass = ssh_passphrase(ctx)?;
     // Without a key we can still fetch, fast-forward and push.
     let signer = ctx.signer().ok();
     let report = sync::sync(ctx.repo, ctx.remote, signer)?;
@@ -492,6 +517,15 @@ fn sync_now(ctx: &Ctx, req: &Req) -> Result<Resp> {
         ));
     }
     Ok(Resp::Redirect(with_param(back_of(req), "msg", &msg)))
+}
+
+/// Gives ssh the passphrase the page unlocked, for the rest of this call.
+pub(crate) fn ssh_passphrase(ctx: &Ctx) -> Result<Option<sync::PassphraseGuard>> {
+    ctx.passphrase
+        .as_deref()
+        .map(sync::PassphraseGuard::activate)
+        .transpose()
+        .map_err(Into::into)
 }
 
 /// Where a POST returns to: its `back` field, if it's a local path.

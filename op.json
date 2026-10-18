@@ -1,13 +1,8 @@
 {
   "v": 1,
-  "type": "issue.create",
-  "lamport": 1,
+  "type": "issue.comment",
+  "lamport": 2,
   "payload": {
-    "body": "Add a separate page where people can be manged. \r\n\r\nAt the top it shows the current user as \"You\". After that a list of all people registered are shown. The number of keys registered to a person is only shown to the owner. \"You\"'s number of keys is always shown.\r\n\r\nAnother nice-to-have feature is to cover the email address of all people by adding a blur on top of it and replacing the email with some random text so that the email does not show through the blur. Hovering on top of it shows a tooltip \"Click to reveal email\" or \"Click to hide email\".\r\n\r\nA search bar to search for people by name would also be nice.\r\n\r\nA three-dot menu can be added in every person's entry which has an option to change policy for that person. This is only reserved to roles which have permission to update policies.\r\n\r\nWhen this is done, the people section can be removed from the overview. Then issues and PRs can have their own halves of the screen.",
-    "labels": [
-      "feature"
-    ],
-    "nonce": "18dfa5e7c38a1a4a17c5b6",
-    "title": "A separate page for managing people"
+    "body": "Implemented in commit c95d171"
   }
 }

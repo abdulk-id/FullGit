@@ -299,16 +299,18 @@ Commit timestamps are informational only and never used for ordering.
 - Everything the CLI does with issues and pull requests works there: opening, commenting (line comments from the diff,
   replies in threads), reviewing, editing, labels (picked from the list) and assignees, closing, merging. Sync is a
   button. Revising stays on the command line, since it comes from a branch.
-- Server-rendered HTML, no JS. Each GET only reads, and Each POST does one thing and redirects back with a message.
+- Server-rendered HTML. Each GET only reads, and each POST does one thing and redirects back with a message.
+  The only script is the browser's own prompt and alert for a locked signing key.
 - Access: the server prints a URL holding a random token. Visiting it sets an `HttpOnly`, `SameSite=Strict` cookie
   named for the port; every other request needs that cookie. The `Host` header must be the served address (against DNS
   rebinding), and a POST's `Origin`, when present, must be the server itself (against forged forms). The content
-  security policy forbids scripts and framing.
+  security policy allows only that script, by a nonce that changes every response, and forbids framing.
 - What users wrote is escaped; markdown is rendered with raw HTML shown as text, and links keep only http(s), mailto
   and relative targets. Remote https images do load.
 - Secrets in a diff show as "encrypted secret", not as armored text.
 - Requests are handled one at a time. A passphrase-protected key that ssh-agent doesn't hold is unlocked from the
-  page and kept in memory until the server stops or the key is locked again; the server never reads a passphrase
+  browser's prompt and kept in memory until the server stops or the key is locked again. A locked key or a wrong
+  passphrase is the browser's alert, not a banner on the page. The server never reads a passphrase
   from its terminal. Signing uses that key in-process. Sync, fetch and push give the same passphrase to ssh through
   a program, so a protected key doesn't hang the browser.
 

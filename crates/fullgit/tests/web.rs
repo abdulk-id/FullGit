@@ -427,8 +427,41 @@ fn issues_and_pull_requests_in_the_browser() {
     );
 }
 
-/// With a passphrase on the key and no ssh-agent, the page asks for it,
-/// rather than the server's terminal.
+/// The locked-key page asks with `prompt` and reports with `alert`, not a form or banner.
+fn assert_key_popup(page: &Reply, alert: Option<&str>) {
+    let body = &page.body;
+    assert!(
+        !body.contains(r#"<form class="flash lock""#) && !body.contains(r#"type="password""#),
+        "{body}"
+    );
+    assert!(
+        body.contains("prompt(") && body.contains("needs its passphrase"),
+        "{body}"
+    );
+    let nonce = body
+        .split_once(r#"<script nonce=""#)
+        .unwrap()
+        .1
+        .split('"')
+        .next()
+        .unwrap();
+    let csp = page.header("Content-Security-Policy");
+    assert!(
+        csp.contains(&format!("script-src 'nonce-{nonce}'"))
+            && !csp.contains("script-src 'unsafe-inline'"),
+        "{csp}"
+    );
+    match alert {
+        Some(msg) => {
+            assert!(body.contains(&format!("err=\"{msg}\"")), "{body}");
+            assert!(!body.contains(r#"class="flash err""#), "{body}");
+        }
+        None => assert!(body.contains("err=null"), "{body}"),
+    }
+}
+
+/// With a passphrase on the key and no ssh-agent, the browser's own prompt
+/// asks for it, rather than a form or the server's terminal.
 #[test]
 fn a_locked_key_is_unlocked_in_the_browser() {
     let fx = Fixture::new();
@@ -444,25 +477,35 @@ fn a_locked_key_is_unlocked_in_the_browser() {
     assert!(locked.success());
     let s = start(&alice);
 
-    let home = s.get("/").body;
-    assert!(
-        home.contains(r#"action="/unlock""#) && home.contains("needs its passphrase"),
-        "{home}"
-    );
+    assert_key_popup(&s.get("/"), None);
     let to = s.post("/issues/new", &[("back", "/issues/new"), ("title", "Hi")]);
     assert!(to.contains("err=your%20key%20is%20locked"), "{to}");
+    assert_key_popup(
+        &s.get(&to),
+        Some("your key is locked; unlock it with its passphrase first"),
+    );
     // Sync used to ask ssh for the passphrase on the server's terminal.
     let to = s.post("/sync", &[("back", "/")]);
     assert!(to.contains("err=your%20key%20is%20locked"), "{to}");
+    assert_key_popup(
+        &s.get(&to),
+        Some("your key is locked; unlock it with its passphrase first"),
+    );
 
     let to = s.post("/unlock", &[("back", "/issues"), ("passphrase", "guess")]);
     assert!(to.starts_with("/issues?err=wrong%20passphrase"), "{to}");
+    assert_key_popup(&s.get(&to), Some("wrong passphrase"));
     let to = s.post("/unlock", &[("back", "/issues"), ("passphrase", "s3cret")]);
     assert!(to.starts_with("/issues?msg=Key%20unlocked"), "{to}");
-    let page = s.get("/issues").body;
+    let page = s.get("/issues");
     assert!(
-        !page.contains(r#"action="/unlock""#) && page.contains(r#"action="/lock""#),
-        "{page}"
+        !page.body.contains("<script")
+            && !page
+                .header("Content-Security-Policy")
+                .contains("script-src")
+            && page.body.contains(r#"action="/lock""#),
+        "{}",
+        page.body
     );
 
     let to = s.post("/issues/new", &[("back", "/issues/new"), ("title", "Hi")]);
@@ -473,7 +516,7 @@ fn a_locked_key_is_unlocked_in_the_browser() {
     assert!(to.contains("msg=Synced"), "{to}");
 
     s.post("/lock", &[("back", "/")]);
-    assert!(s.get("/").body.contains(r#"action="/unlock""#));
+    assert_key_popup(&s.get("/"), None);
 }
 
 /// Sync over ssh takes the passphrase from the page, not from a terminal.
@@ -538,6 +581,10 @@ esac
     let s = start(&alice);
     let to = s.post("/sync", &[("back", "/")]);
     assert!(to.contains("err=your%20key%20is%20locked"), "{to}");
+    assert_key_popup(
+        &s.get(&to),
+        Some("your key is locked; unlock it with its passphrase first"),
+    );
     let to = s.post("/unlock", &[("back", "/"), ("passphrase", "s3cret")]);
     assert!(to.contains("msg=Key%20unlocked"), "{to}");
     let to = s.post("/sync", &[("back", "/")]);

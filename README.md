@@ -223,9 +223,9 @@ fullgit web
 Opens a local web UI with the overview, issues, pull requests, people, diffs with line comments, reviews and
 merging. It serves only your machine, and only to whoever has the URL it prints.
 
-If your key has a passphrase and isn't in `ssh-agent`, the page asks for it once. The server keeps the key unlocked in
-memory until it stops, or until you press "Lock key". Sync and merge use that key, and don't ask for it on the
-terminal.
+If your key has a passphrase and isn't in `ssh-agent`, the browser asks for it once, in its own prompt, and uses its
+own alert if the key is locked or the passphrase is wrong. The server keeps the key unlocked in memory until it
+stops, or until you press "Lock key". Sync and merge use that key, and don't ask for it on the terminal.
 
 ### When something's off
 

@@ -104,7 +104,10 @@ pub fn list(ctx: &Ctx, req: &Req) -> Result<Resp> {
 }
 
 pub fn new_form(ctx: &Ctx, req: &Req) -> Result<Resp> {
-    ctx.signer()?;
+    // A locked key still gets the form; the page asks for the passphrase.
+    if !ctx.locked() {
+        ctx.signer()?;
+    }
     let body = format!(
         r#"<h1>New issue</h1><form class="stack" method="post" action="/issues/new">{}
 <input type="text" name="title" placeholder="Title" required autofocus>

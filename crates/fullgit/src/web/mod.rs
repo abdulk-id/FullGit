@@ -5,11 +5,14 @@
 //! `SameSite=Strict`, so other sites can't make the browser act here. The
 //! `Host` header must be the address served (against DNS rebinding), and
 //! a POST's `Origin`, when sent, must be this server. Pages run no
-//! scripts; the content security policy forbids them.
+//! scripts except one, when the signing key is locked: the browser's own
+//! prompt asks for the passphrase, and its alert reports that the key is
+//! locked or the passphrase was wrong. The content security policy allows
+//! only that script, by a nonce that changes on every response.
 //!
 //! The server never asks for a passphrase on its terminal, where nobody
 //! is looking: a key that needs one, and that ssh-agent doesn't hold, is
-//! unlocked from the page and kept in memory until the server stops, as
+//! unlocked from that prompt and kept in memory until the server stops, as
 //! ssh-agent would keep it. Sync and merge give that passphrase to ssh,
 //! which would otherwise read it from the terminal and hang the browser.
 //!
@@ -233,14 +236,17 @@ impl Ctx<'_> {
             }
             None => "read-only: your key has no identity".into(),
         };
-        let body = match self.locked() {
-            true => format!(
-                r#"<form class="flash lock" method="post" action="/unlock">{}<label for="passphrase">Your key <code>{}</code> needs its passphrase before you can change anything. fullgit keeps it unlocked in memory until the server stops.</label> <input type="password" id="passphrase" name="passphrase" autocomplete="off" required> <button class="btn">Unlock</button></form>{body}"#,
-                back(&path),
-                esc(&self.key_name),
-            ),
-            false => body,
-        };
+        // The locked-key and wrong-passphrase messages are the browser's
+        // alert, not the banner. The prompt replaces the old unlock form.
+        let err = req.q("err");
+        let alert = err.filter(|e| popup_error(e));
+        let mut body = body;
+        if self.locked() || alert.is_some() {
+            body.insert_str(
+                0,
+                &key_popup(alert, self.locked().then_some(&self.key_name)),
+            );
+        }
         Resp::Html(
             200,
             Page {
@@ -249,12 +255,64 @@ impl Ctx<'_> {
                 me: &me,
                 path: &path,
                 msg: req.q("msg"),
-                err: req.q("err"),
+                err: err.filter(|e| alert != Some(*e)),
                 body,
             }
             .render(),
         )
     }
+}
+
+/// Errors the browser shows with `alert`, instead of the page's banner.
+fn popup_error(err: &str) -> bool {
+    err == "your key is locked; unlock it with its passphrase first" || err == "wrong passphrase"
+}
+
+/// `prompt` for the passphrase, and `alert` for `message` when there is one.
+/// The nonce is the only script the page's content security policy allows.
+fn key_popup(message: Option<&str>, key_name: Option<&str>) -> String {
+    let Some(nonce) = fresh_nonce() else {
+        return String::new();
+    };
+    let message = match message {
+        Some(m) => js_string(m),
+        None => "null".into(),
+    };
+    let ask = match key_name {
+        Some(name) => js_string(&format!(
+            "Your key {name} needs its passphrase before you can change anything. \
+             fullgit keeps it unlocked in memory until the server stops."
+        )),
+        None => "null".into(),
+    };
+    format!(
+        r#"<script nonce="{nonce}">(function(){{var err={message};if(err!==null)alert(err);var ask={ask};if(ask===null)return;var pass=prompt(ask);if(pass===null)return;var f=document.createElement("form");f.method="post";f.action="/unlock";function field(n,v){{var i=document.createElement("input");i.type="hidden";i.name=n;i.value=v;f.appendChild(i)}}field("passphrase",pass);var url=new URL(location.href);url.searchParams.delete("err");url.searchParams.delete("msg");field("back",url.pathname+url.search+url.hash);document.body.appendChild(f);f.submit()}})()</script>"#
+    )
+}
+
+fn fresh_nonce() -> Option<String> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).ok()?;
+    Some(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// A quoted JavaScript string. `<` is escaped so the text can't close the script.
+fn js_string(s: &str) -> String {
+    let mut out = String::from('"');
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
+            '<' => out.push_str("\\u003c"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 fn query_string(q: &BTreeMap<String, String>) -> String {
@@ -601,9 +659,14 @@ fn same(a: &str, b: &str) -> bool {
             == 0
 }
 
-fn security_headers<R: Read>(r: Response<R>) -> Response<R> {
-    let csp = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' https: data:; \
-               form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
+fn security_headers<R: Read>(r: Response<R>, script_nonce: Option<&str>) -> Response<R> {
+    let mut csp = String::from(
+        "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' https: data:; \
+         form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+    );
+    if let Some(nonce) = script_nonce {
+        csp.push_str(&format!("; script-src 'nonce-{nonce}'"));
+    }
     r.with_header(Header::from_bytes("Content-Security-Policy", csp).expect("valid header"))
         .with_header(Header::from_bytes("X-Frame-Options", "DENY").expect("valid header"))
         // Not `no-referrer`: under it, browsers send `Origin: null` with
@@ -613,6 +676,7 @@ fn security_headers<R: Read>(r: Response<R>) -> Response<R> {
 }
 
 fn html_response(status: u16, body: String) -> Response<std::io::Cursor<Vec<u8>>> {
+    let nonce = script_nonce_in(&body);
     security_headers(
         Response::from_string(body)
             .with_status_code(status)
@@ -620,7 +684,19 @@ fn html_response(status: u16, body: String) -> Response<std::io::Cursor<Vec<u8>>
                 Header::from_bytes("Content-Type", "text/html; charset=utf-8")
                     .expect("valid header"),
             ),
+        nonce.as_deref(),
     )
+}
+
+/// The nonce of the page's own script, if it has one.
+fn script_nonce_in(body: &str) -> Option<String> {
+    let rest = body.split_once("<script nonce=\"")?.1;
+    let nonce = rest.split('"').next()?;
+    if nonce.len() == 32 && nonce.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(nonce.to_owned())
+    } else {
+        None
+    }
 }
 
 fn text(status: u16, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
@@ -631,6 +707,7 @@ fn text(status: u16, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
                 Header::from_bytes("Content-Type", "text/plain; charset=utf-8")
                     .expect("valid header"),
             ),
+        None,
     )
 }
 
@@ -641,6 +718,7 @@ fn redirect(to: &str) -> Response<std::io::Cursor<Vec<u8>>> {
         Response::from_string("")
             .with_status_code(303)
             .with_header(location),
+        None,
     )
 }
 

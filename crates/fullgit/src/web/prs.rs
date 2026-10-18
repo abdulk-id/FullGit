@@ -112,7 +112,10 @@ pub fn list(ctx: &Ctx, req: &Req) -> Result<Resp> {
 }
 
 pub fn new_form(ctx: &Ctx, req: &Req) -> Result<Resp> {
-    ctx.signer()?;
+    // A locked key still gets the form; the page asks for the passphrase.
+    if !ctx.locked() {
+        ctx.signer()?;
+    }
     let target = default_branch(ctx.repo, ctx.remote).unwrap_or_default();
     let current = current_branch(ctx.repo);
     let mut options = String::new();

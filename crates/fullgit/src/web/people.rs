@@ -1,8 +1,8 @@
 //! The people page: who is registered, and the role an owner can give them.
 //!
 //! Emails are covered until clicked. The cover is other text, blurred, so
-//! the address itself is not what shows through. Pages have no scripts, so
-//! the cover is a checkbox and the menu is `<details>`.
+//! the address itself is not what shows through. The cover doesn't use a
+//! script: it is a checkbox, and the menu is `<details>`.
 
 use std::fmt::Write;
 

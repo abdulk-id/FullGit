@@ -1,11 +1,8 @@
 {
   "v": 1,
-  "type": "policy.genesis",
-  "lamport": 1,
+  "type": "policy.label_add",
+  "lamport": 2,
   "payload": {
-    "nonce": "18df620b1311f7e5123378",
-    "owners": [
-      "263092993af6842217b878a7df569a5686944a9e"
-    ]
+    "label": "bug"
   }
 }

@@ -17,6 +17,7 @@
 
 mod html;
 mod issues;
+mod people;
 mod prs;
 mod settings;
 
@@ -445,6 +446,8 @@ impl App {
             (false, ["prs", id]) => prs::show(&ctx, req, pr::resolve(&repo, id)?),
             (false, ["prs", id, "diff"]) => prs::diff(&ctx, req, pr::resolve(&repo, id)?),
             (true, ["prs", id, action]) => prs::act(&ctx, req, pr::resolve(&repo, id)?, action),
+            (false, ["people"]) => people::show(&ctx, req),
+            (true, ["people", "role"]) => people::set_role(&ctx, req),
             (false, ["settings"]) => settings::show(&ctx, req),
             (true, ["settings", "labels"]) => settings::labels(&ctx, req),
             _ => bail!("no page {}", req.path),
@@ -466,65 +469,13 @@ fullgit sync</pre>
     ctx.page(req, "Set up", body.into())
 }
 
-/// The overview: what's open, and who may do what.
+/// The overview: open pull requests and issues, each on half the page.
 fn home(ctx: &Ctx, req: &Req) -> Result<Resp> {
-    let mut body = String::new();
-    body.push_str(r#"<div class="grid"><div>"#);
+    let mut body = String::from(r#"<div class="grid">"#);
     body.push_str(&prs::summary(ctx)?);
     body.push_str(&issues::summary(ctx)?);
-    body.push_str("</div><div>");
-    body.push_str(&people(ctx));
-    body.push_str("</div></div>");
+    body.push_str("</div>");
     Ok(ctx.page(req, "Overview", body))
-}
-
-fn people(ctx: &Ctx) -> String {
-    let mut s =
-        String::from(r#"<div class="box"><div class="hd"><b>People</b></div><div class="bd pad">"#);
-    if ctx.me.is_none() {
-        s.push_str(
-            r#"<div class="flash err">Your signing key belongs to no identity, so this page is read-only. Run <code>fullgit id create</code>.</div>"#,
-        );
-    }
-    let policy = ctx.trust.policy.as_ref().map(|(_, p)| p);
-    s.push_str(
-        r#"<table class="people"><tr><th>Name</th><th>Email</th><th>Role</th><th>Keys</th></tr>"#,
-    );
-    let mut people: Vec<_> = ctx.trust.identities.iter().collect();
-    people.sort_by_key(|(id, i)| (std::cmp::Reverse(ctx.trust.role(**id)), i.name.clone()));
-    for (id, i) in people {
-        s.push_str(&format!(
-            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
-            ctx.person(Some(*id)),
-            esc(&i.email),
-            esc(crate::role_name(&ctx.trust, *id)),
-            i.keys.len()
-        ));
-    }
-    s.push_str("</table>");
-    if let Some(p) = policy {
-        for (group, members) in &p.groups {
-            let names: Vec<_> = members.iter().map(|m| esc(&ctx.who(Some(*m)))).collect();
-            s.push_str(&format!(
-                "<p>Group <b>{}</b>: {}</p>",
-                esc(group),
-                names.join(", ")
-            ));
-        }
-        for (branch, rule) in &p.rules {
-            let from = rule
-                .group
-                .as_ref()
-                .map_or(String::new(), |g| format!(" from {}", esc(g)));
-            s.push_str(&format!(
-                r#"<p>Merging into <code class="ref">{}</code> takes {} approval(s){from}.</p>"#,
-                esc(branch),
-                rule.approvals
-            ));
-        }
-    }
-    s.push_str("</div></div>");
-    s
 }
 
 fn sync_now(ctx: &Ctx, req: &Req) -> Result<Resp> {

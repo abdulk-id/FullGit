@@ -139,7 +139,7 @@ impl Page<'_> {
 <title>{title} · {repo}</title><style>{CSS}</style></head>
 <body><header><div class="bar">
 <a class="brand" href="/">fullgit</a><span class="repo">{repo}</span>
-<nav><a href="/issues">Issues</a><a href="/prs">Pull requests</a><a href="/settings">Settings</a></nav>
+<nav><a href="/issues">Issues</a><a href="/prs">Pull requests</a><a href="/people">People</a><a href="/settings">Settings</a></nav>
 <span class="spacer"></span><span class="me">{me}</span>
 <form method="post" action="/sync">{back}<button class="btn">Sync</button></form>
 </div></header>
@@ -227,8 +227,36 @@ details summary{cursor:pointer;color:var(--muted)}details[open] summary{margin-b
 .diff .note .box{margin:4px 0;max-width:820px}.diff .msg{padding:10px 14px;color:var(--muted)}
 pre.code{background:var(--soft);padding:8px 10px;margin:8px 0;border-radius:6px;font:12px/18px ui-monospace,monospace;overflow:auto}
 pre.code .hl{background:var(--warn);display:inline-block;width:100%}
-table.people{border-collapse:collapse;width:100%}table.people td,table.people th{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line)}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}@media (max-width:860px){.grid{grid-template-columns:1fr}}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start}@media (max-width:860px){.grid{grid-template-columns:1fr}}
+form.search{display:flex;gap:8px;margin:0 0 16px;max-width:28em}form.search input{flex:1;width:auto;min-width:0}form.search button{flex:none}
+.box.you{border-color:var(--accent)}
+.person{display:flex;gap:16px;align-items:center;padding:10px 14px}
+.person .who{flex:1;min-width:10em}.person .who .sub{margin-left:6px}
+.person .mail{flex:1.4;min-width:8em}.person .role{width:7.5em;color:var(--muted)}
+.person .keys{width:4.5em;color:var(--muted);white-space:nowrap}
+.list>.person{border-bottom:1px solid var(--line)}.list>.person:last-child{border-bottom:0}
+.veil{position:relative;display:inline-block;cursor:pointer}
+.veil input{position:absolute;opacity:0;width:1px;height:1px}
+.veil .masked,.veil .clear{position:relative}
+.veil .clear{display:none}
+.veil input:checked ~ .masked{display:none}
+.veil input:checked ~ .clear{display:inline}
+.veil .blur{filter:blur(6px);user-select:none;letter-spacing:.03em}
+.veil .tip{display:none;position:absolute;left:0;top:calc(100% + 4px);z-index:3;background:var(--fg);color:var(--bg);
+font-size:12px;line-height:1.3;font-weight:400;padding:3px 8px;border-radius:4px;white-space:nowrap}
+.veil .masked:hover .tip,.veil .clear:hover .tip{display:block}
+.veil input:focus-visible ~ .masked,.veil input:focus-visible ~ .clear{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+details.menu{position:relative;display:inline-block}
+details.menu>summary{list-style:none;cursor:pointer;width:28px;height:28px;display:flex;align-items:center;justify-content:center;
+border-radius:6px;border:1px solid transparent;color:var(--fg);user-select:none}
+details.menu>summary::-webkit-details-marker{display:none}
+details.menu>summary::marker{content:none}
+details.menu>summary:hover,details.menu[open]>summary{background:var(--soft);border-color:var(--line);margin-bottom:0}
+details.menu .pop{position:absolute;right:0;top:calc(100% + 4px);z-index:5;background:var(--bg);border:1px solid var(--line);
+border-radius:6px;padding:12px;min-width:200px;box-shadow:0 8px 24px #0003}
+details.menu .pop p{margin:0 0 8px;font-weight:600;color:var(--fg)}
+details.menu .pop form{display:flex;flex-direction:column;gap:8px;margin:0}
+details.menu .pop button{width:100%}
 .revs a{display:block;padding:2px 0}.revs .cur{font-weight:600}
 code.ref{background:var(--hunk);padding:1px 6px;border-radius:6px;font-size:12px}
 "#;

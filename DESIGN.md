@@ -290,9 +290,12 @@ Commit timestamps are informational only and never used for ordering.
 ## Web UI
 
 - `fullgit web [--port N] [--no-open] [--remote origin]` serves the clone at `127.0.0.1` (a free port by default) and
-  opens the browser. Pages: an overview (open pull requests and issues, people, roles and branch rules), issue and
+  opens the browser. Pages: an overview (open pull requests and issues, side by side), a people page, issue and
   pull request lists, an issue, a pull request's conversation, its changes per revision or between two revisions, and
   settings, where maintainers manage the labels (with those still on issues but no longer listed, to add back).
+  The people page shows you first, then everyone registered, and can be searched by name. Emails are covered
+  until clicked. An owner changes a person's role from that person's menu. A key count is shown for you, and
+  for everyone else only when you are an owner. Groups and branch rules are listed there too.
 - Everything the CLI does with issues and pull requests works there: opening, commenting (line comments from the diff,
   replies in threads), reviewing, editing, labels (picked from the list) and assignees, closing, merging. Sync is a
   button. Revising stays on the command line, since it comes from a branch.

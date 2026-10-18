@@ -464,3 +464,155 @@ fn a_locked_key_is_unlocked_in_the_browser() {
     s.post("/lock", &[("back", "/")]);
     assert!(s.get("/").body.contains(r#"action="/unlock""#));
 }
+
+/// People leave the overview, which then splits issues and pull requests,
+/// and live on their own page.
+#[test]
+fn people_have_their_own_page() {
+    let fx = Fixture::new();
+    let remote = fx.bare("remote.git");
+    git(&remote, &["symbolic-ref", "HEAD", "refs/heads/master"]);
+    let alice = user(&fx, &remote, "alice");
+    let bob = user(&fx, &remote, "bob");
+    adopt(&alice, &[(&bob, "contributor")]);
+    fg_ok(
+        &alice,
+        &["policy", "group", "add", "dev", "bob@example.com"],
+    );
+    fg_ok(&alice, &["policy", "protect", "master"]);
+
+    let id_of = |who: &str| {
+        fg_ok(&alice, &["id", "show", who])
+            .lines()
+            .next()
+            .unwrap()
+            .strip_prefix("identity ")
+            .unwrap()
+            .to_owned()
+    };
+    let alice_id = id_of("me");
+    let bob_id = id_of("bob@example.com");
+
+    let s = start(&alice);
+    let home = s.get("/").body;
+    let grid = home.find(r#"<div class="grid">"#).unwrap();
+    let prs = home.find("Open pull requests").unwrap();
+    let issues = home.find("Open issues").unwrap();
+    assert!(grid < prs && prs < issues, "{home}");
+    assert!(!home.contains("<b>All people</b>"), "{home}");
+    assert!(
+        !home.contains("Merging into") && !home.contains("Group <b>"),
+        "{home}"
+    );
+    assert!(home.contains(r#"href="/people""#), "{home}");
+
+    let page = s.get("/people").body;
+    let (you, list) = page.split_once("<b>All people</b>").unwrap();
+    assert!(
+        you.contains("<b>You</b>") && you.contains(">alice<"),
+        "{you}"
+    );
+    assert!(
+        list.contains("<b>bob</b>") && !list.contains("<b>alice</b>"),
+        "{list}"
+    );
+    assert_eq!(you.matches(r#"class="keys""#).count(), 1, "{you}");
+    assert_eq!(list.matches(r#"class="keys""#).count(), 1, "{list}");
+    assert_eq!(
+        page.matches(r#"action="/people/role""#).count(),
+        2,
+        "{page}"
+    );
+    assert!(
+        page.contains("Click to reveal email") && page.contains("Click to hide email"),
+        "{page}"
+    );
+    assert!(
+        page.contains("Group <b>dev</b>") && page.contains("Merging into"),
+        "{page}"
+    );
+    let blurs: Vec<_> = page
+        .split(r#"class="blur">"#)
+        .skip(1)
+        .map(|s| s.split('<').next().unwrap())
+        .collect();
+    assert_eq!(blurs.len(), 2, "{blurs:?}");
+    for text in &blurs {
+        assert!(
+            !text.contains('@') && text.chars().all(|c| c.is_ascii_lowercase()),
+            "{text}"
+        );
+    }
+    let mut lens: Vec<_> = blurs.iter().map(|t| t.len()).collect();
+    lens.sort_unstable();
+    assert_eq!(
+        lens,
+        vec!["bob@example.com".len(), "alice@example.com".len()]
+    );
+    assert!(page.contains("alice@example.com") && page.contains("bob@example.com"));
+
+    let found = s.get("/people?q=BoB").body;
+    let list = found.split("<b>All people</b>").nth(1).unwrap();
+    assert!(
+        list.contains("<b>bob</b>") && !list.contains("<b>alice</b>"),
+        "{list}"
+    );
+    let none = s.get("/people?q=zzzz").body;
+    let list = none.split("<b>All people</b>").nth(1).unwrap();
+    assert!(
+        list.contains("No one else matches.") && !list.contains("<b>bob</b>"),
+        "{list}"
+    );
+    assert!(none.contains("<b>You</b>"), "{none}");
+
+    let to = s.post(
+        "/people/role",
+        &[
+            ("back", "/people"),
+            ("identity", &bob_id),
+            ("role", "contributor"),
+        ],
+    );
+    assert!(to.contains("nothing%20changed"), "{to}");
+    let to = s.post(
+        "/people/role",
+        &[
+            ("back", "/people"),
+            ("identity", &bob_id),
+            ("role", "maintainer"),
+        ],
+    );
+    assert!(to.starts_with("/people?msg="), "{to}");
+    let page = s.get("/people").body;
+    let list = page.split("<b>All people</b>").nth(1).unwrap();
+    assert!(list.contains("maintainer"), "{list}");
+    let show = fg_ok(&alice, &["policy", "show"]);
+    assert!(
+        show.contains("maintainer") && show.contains("bob@example.com"),
+        "{show}"
+    );
+    let to = s.post(
+        "/people/role",
+        &[("back", "/people"), ("identity", &alice_id), ("role", "")],
+    );
+    assert!(to.contains("one%20owner"), "{to}");
+
+    let bs = start(&bob);
+    let before = git(&bob, &["for-each-ref", "refs/fullgit/policy"]);
+    let page = bs.get("/people").body;
+    let (you, list) = page.split_once("<b>All people</b>").unwrap();
+    assert!(you.contains("<b>You</b>") && you.contains(">bob<"), "{you}");
+    assert_eq!(you.matches(r#"class="keys""#).count(), 1, "{you}");
+    assert_eq!(list.matches(r#"class="keys""#).count(), 0, "{list}");
+    assert!(!page.contains("/people/role"), "{page}");
+    let to = bs.post(
+        "/people/role",
+        &[
+            ("back", "/people"),
+            ("identity", &bob_id),
+            ("role", "owner"),
+        ],
+    );
+    assert!(to.contains("only%20an%20owner"), "{to}");
+    assert_eq!(before, git(&bob, &["for-each-ref", "refs/fullgit/policy"]));
+}

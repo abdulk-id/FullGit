@@ -1,8 +1,8 @@
 {
   "v": 1,
   "type": "policy.label_add",
-  "lamport": 2,
+  "lamport": 3,
   "payload": {
-    "label": "bug"
+    "label": "testing"
   }
 }

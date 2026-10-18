@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "type": "issue.create",
+  "lamport": 1,
+  "payload": {
+    "body": "The web UI was recently updated to ask for the SSH key passphrase in the UI itself instead of in the terminal. And taking protected actions prompt for unlocking the key in the web UI. But syncing from web UI still hangs the web UI and asks for the key in the terminal.\r\n\r\nMake all protected operations ask for the key from the web UI.",
+    "labels": [
+      "bug"
+    ],
+    "nonce": "18dfa8e0ef69edc7198c16",
+    "title": "Sync asks for SSH key passphrase in terminal"
+  }
+}

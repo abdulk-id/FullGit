@@ -81,8 +81,8 @@ pub fn read_op(repo: &Repository, id: Oid) -> Result<StoredOp> {
     let signature: &str = signature
         .as_str()
         .map_err(|_| malformed("signature is not UTF-8".into()))?;
-    let signer: KeyData = sign::verify(&signed, signature)
-        .map_err(|e| malformed(format!("bad signature: {e}")))?;
+    let signer: KeyData =
+        sign::verify(&signed, signature).map_err(|e| malformed(format!("bad signature: {e}")))?;
 
     let commit: git2::Commit = repo.find_commit(id)?;
     let tree: git2::Tree = commit.tree()?;

@@ -100,7 +100,9 @@ pub fn retention_for(repo: &Repository, keys: &[KeyData]) -> Result<RetentionMap
     let mut retention: RetentionMap = RetentionMap::new();
     for r in repo.references_glob(&format!("{}*", refs::PREFIX))? {
         let r: git2::Reference = r?;
-        if r.name().is_ok_and(|n: &str| n.starts_with(refs::CODE_PREFIX)) {
+        if r.name()
+            .is_ok_and(|n: &str| n.starts_with(refs::CODE_PREFIX))
+        {
             continue;
         }
         let Some(head): Option<Oid> = r.target() else {
@@ -158,12 +160,13 @@ impl Trust {
     pub fn load(repo: &Repository) -> Result<Self> {
         let mut trust: Trust = Self::load_identities(repo)?;
         if let Some(root) = policy::root(repo)? {
-            let policy: model::Loaded<Policy> = model::load::<Policy>(repo, &trust, root).map_err(|e| match e {
-                Error::NotFound(_) => Error::Policy(format!(
-                    "policy {root} is not in this clone; run `fullgit sync`"
-                )),
-                e => e,
-            })?;
+            let policy: model::Loaded<Policy> =
+                model::load::<Policy>(repo, &trust, root).map_err(|e| match e {
+                    Error::NotFound(_) => Error::Policy(format!(
+                        "policy {root} is not in this clone; run `fullgit sync`"
+                    )),
+                    e => e,
+                })?;
             trust.policy = Some((root, policy.model));
         }
         Ok(trust)

@@ -1,6 +1,7 @@
 //! CLI subcommand modules: each file defines a `*Cmd` clap enum and a `run` entry point.
 
 pub mod doctor;
+pub mod github;
 pub mod hook;
 pub mod id;
 pub mod issue;

@@ -15,7 +15,10 @@ use super::html::{avatar, back, escape_for_html, url_encode};
 use super::{HandlerResult, PageContext, ParsedRequest, with_param};
 
 pub fn show(ctx: &PageContext, req: &ParsedRequest) -> Result<HandlerResult> {
-    let q = req.query_param("q").map(str::trim).filter(|q| !q.is_empty());
+    let q = req
+        .query_param("q")
+        .map(str::trim)
+        .filter(|q| !q.is_empty());
     let back_to = here(q);
     let mut b = String::from("<h1>People</h1>");
     if ctx.me.is_none() {
@@ -209,7 +212,11 @@ pub fn set_role(ctx: &PageContext, req: &ParsedRequest) -> Result<HandlerResult>
             format!("Removed {who}'s role. Sync shares it.")
         }
     };
-    Ok(HandlerResult::Redirect(with_param(super::back_of(req), "msg", &msg)))
+    Ok(HandlerResult::Redirect(with_param(
+        super::back_of(req),
+        "msg",
+        &msg,
+    )))
 }
 
 /// Groups and branch rules, which used to sit in the overview's people panel.

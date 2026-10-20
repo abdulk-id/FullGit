@@ -164,6 +164,18 @@ A git host can't stop people with push access from pushing to `master` directly,
 `fullgit verify master` lists every commit since the branch was protected that didn't come through a pull request. Use
 your host's branch protection alongside it where you can.
 
+### GitHub
+
+```sh
+fullgit github import                  # this clone's origin, when it is GitHub
+fullgit sync
+```
+
+Copies that repository's issues and pull requests into this clone. It only reads GitHub. Run it again to pick up
+changes there: what it imported is updated, and comments written here stay. You sign the imported operations, so
+GitHub's names appear in the text rather than as the author. A review on GitHub is copied as a comment; it does not
+count as an approval. `gh` has to be installed and logged in.
+
 ### Secrets
 
 Secrets are encrypted to a policy group:

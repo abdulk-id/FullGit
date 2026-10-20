@@ -64,7 +64,10 @@ impl Model for Identity {
             if op.op.kind != "identity.create" {
                 return Err(format!("{} cannot create an identity", op.op.kind));
             }
-            let (name, email) = (payload::required_string(p, "name")?, payload::required_string(p, "email")?);
+            let (name, email) = (
+                payload::required_string(p, "name")?,
+                payload::required_string(p, "email")?,
+            );
             self.name = name.to_owned();
             self.email = email.to_owned();
             self.keys = vec![op.signer.clone()];
@@ -83,8 +86,8 @@ impl Model for Identity {
                 }
             }
             "identity.add_key" => {
-                let key =
-                    sign::key_from_string(payload::required_string(p, "key")?).map_err(|e| e.to_string())?;
+                let key = sign::key_from_string(payload::required_string(p, "key")?)
+                    .map_err(|e| e.to_string())?;
                 if self.keys.contains(&key) {
                     return Err("key is already present".into());
                 }
@@ -101,8 +104,8 @@ impl Model for Identity {
                 self.keys.push(key);
             }
             "identity.remove_key" => {
-                let key =
-                    sign::key_from_string(payload::required_string(p, "key")?).map_err(|e| e.to_string())?;
+                let key = sign::key_from_string(payload::required_string(p, "key")?)
+                    .map_err(|e| e.to_string())?;
                 let keep: RetentionMap = retention_from_json(p)?;
                 let Some(i) = self.keys.iter().position(|k| *k == key) else {
                     return Err("key is not present".into());

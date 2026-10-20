@@ -151,7 +151,10 @@ pub fn new_form(ctx: &PageContext, req: &ParsedRequest) -> Result<HandlerResult>
 }
 
 pub fn create(ctx: &PageContext, req: &ParsedRequest) -> Result<HandlerResult> {
-    let (source, target) = (req.require_form_field("source")?, req.require_form_field("target")?);
+    let (source, target) = (
+        req.require_form_field("source")?,
+        req.require_form_field("target")?,
+    );
     let (head, base, _) = range(ctx.repo, ctx.remote, source, target)?;
     let id = pr::create(
         ctx.repo,
@@ -809,7 +812,10 @@ pub fn handle_action(
                         revision: Oid::from_str(req.require_form_field("revision")?)?,
                         path,
                         line: req.require_form_field("line")?.parse()?,
-                        side: req.require_form_field("side")?.parse().map_err(anyhow::Error::msg)?,
+                        side: req
+                            .require_form_field("side")?
+                            .parse()
+                            .map_err(anyhow::Error::msg)?,
                     },
                     (None, None) => Place::General,
                 };
@@ -828,7 +834,10 @@ pub fn handle_action(
             }
         }
         "review" => {
-            let verdict: Verdict = req.require_form_field("verdict")?.parse().map_err(anyhow::Error::msg)?;
+            let verdict: Verdict = req
+                .require_form_field("verdict")?
+                .parse()
+                .map_err(anyhow::Error::msg)?;
             let body = req.form_field("body").unwrap_or_default().trim();
             if verdict == Verdict::Changes && body.is_empty() {
                 bail!("say what should change");
@@ -853,7 +862,14 @@ pub fn handle_action(
         }
         "edit-comment" => {
             let comment = Oid::from_str(req.require_form_field("comment")?)?;
-            pr::edit_comment(repo, trust, signer, id, comment, req.require_form_field("body")?)?;
+            pr::edit_comment(
+                repo,
+                trust,
+                signer,
+                id,
+                comment,
+                req.require_form_field("body")?,
+            )?;
             "Comment saved."
         }
         other => bail!("unknown action {other}"),

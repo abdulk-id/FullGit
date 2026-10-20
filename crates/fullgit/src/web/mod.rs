@@ -445,7 +445,11 @@ impl App {
             });
             "Key unlocked until the server stops."
         };
-        Ok(HandlerResult::Redirect(with_param(back_of(req), "msg", msg)))
+        Ok(HandlerResult::Redirect(with_param(
+            back_of(req),
+            "msg",
+            msg,
+        )))
     }
 
     /// Cookies are shared across ports, so each server names its own.
@@ -599,7 +603,11 @@ fn sync_now(ctx: &PageContext, req: &ParsedRequest) -> Result<HandlerResult> {
             ", {skipped} skipped (run `fullgit sync` to see why)"
         ));
     }
-    Ok(HandlerResult::Redirect(with_param(back_of(req), "msg", &msg)))
+    Ok(HandlerResult::Redirect(with_param(
+        back_of(req),
+        "msg",
+        &msg,
+    )))
 }
 
 /// Gives ssh the passphrase the page unlocked, for the rest of this call.
@@ -633,7 +641,10 @@ pub fn with_param(url: &str, key: &str, value: &str) -> String {
 
 fn split_url(url: &str) -> (String, BTreeMap<String, String>) {
     let (path, query) = url.split_once('?').unwrap_or((url, ""));
-    (url_form_decode(path), parse_pairs(query).into_iter().collect())
+    (
+        url_form_decode(path),
+        parse_pairs(query).into_iter().collect(),
+    )
 }
 
 fn parse_pairs(s: &str) -> Vec<(String, String)> {

@@ -3,6 +3,7 @@
 
 pub mod entity;
 pub mod filter;
+pub mod github;
 pub mod guard;
 pub mod identity;
 pub mod issue;

@@ -18,8 +18,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use git2::{Oid, Repository};
-use ssh_key::public::KeyData;
 use serde_json::json;
+use ssh_key::public::KeyData;
 
 use crate::model::{self, Model, ReplayContext};
 use crate::op::StoredOp;
@@ -339,8 +339,7 @@ pub fn grant(
     role: Role,
 ) -> Result<Oid> {
     let (_, policy) = loaded(trust)?;
-    let mut payload: serde_json::Value =
-        json!({ "identity": identity.to_string(), "role": role });
+    let mut payload: serde_json::Value = json!({ "identity": identity.to_string(), "role": role });
     if policy.role(identity) > Some(role) {
         payload["keep"] = retention_to_json(&retention_of(repo, trust, identity)?);
     }

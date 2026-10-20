@@ -381,7 +381,10 @@ impl Model for Pr {
                 if source == target {
                     return Err("source and target are the same branch".into());
                 }
-                let (head, base) = (payload::required_oid(p, "head")?, payload::required_oid(p, "base")?);
+                let (head, base) = (
+                    payload::required_oid(p, "head")?,
+                    payload::required_oid(p, "base")?,
+                );
                 self.title = title;
                 self.body = body.to_owned();
                 self.source = source;
@@ -400,7 +403,9 @@ impl Model for Pr {
             (true, kind) => return Err(format!("{kind} cannot open a pull request")),
             (false, "pr.edit") => {
                 moderate("edit")?;
-                let title = payload::optional_string(p, "title")?.map(title).transpose()?;
+                let title = payload::optional_string(p, "title")?
+                    .map(title)
+                    .transpose()?;
                 let body = payload::optional_string(p, "body")?;
                 if title.is_none() && body.is_none() {
                     return Err("nothing to edit".into());
@@ -416,7 +421,10 @@ impl Model for Pr {
             (false, "pr.revise") => {
                 moderate("revise")?;
                 unmerged("revise")?;
-                let (head, base) = (payload::required_oid(p, "head")?, payload::required_oid(p, "base")?);
+                let (head, base) = (
+                    payload::required_oid(p, "head")?,
+                    payload::required_oid(p, "base")?,
+                );
                 let note = payload::optional_string(p, "note")?.unwrap_or_default();
                 self.revisions.push(Revision {
                     id: op.id,

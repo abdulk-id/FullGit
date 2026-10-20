@@ -56,6 +56,10 @@ enum CliCommand {
     /// Pull requests and their review.
     #[command(subcommand)]
     Pr(commands::pr::PrCmd),
+    /// Copy issues and pull requests from GitHub. One-way: nothing is
+    /// written back.
+    #[command(subcommand)]
+    Github(commands::github::GithubCmd),
     /// Browse and work on issues and pull requests in your browser. Serves
     /// this clone on 127.0.0.1, to whoever has the URL it prints.
     Web {
@@ -117,8 +121,7 @@ enum DebugCmd {
 
 fn main() -> Result<()> {
     let cli: Cli = Cli::parse();
-    let repo: Repository =
-        Repository::open_from_env().context("not inside a git repository")?;
+    let repo: Repository = Repository::open_from_env().context("not inside a git repository")?;
     match cli.command {
         CliCommand::Init { remote } => init(&repo, &remote)?,
         CliCommand::Sync { remote } => {
@@ -153,6 +156,7 @@ fn main() -> Result<()> {
         CliCommand::Local(cmd) => commands::local::run(&repo, cmd)?,
         CliCommand::Issue(cmd) => commands::issue::run(&repo, cmd)?,
         CliCommand::Pr(cmd) => commands::pr::run(&repo, cmd)?,
+        CliCommand::Github(cmd) => commands::github::run(&repo, cmd)?,
         CliCommand::Web {
             port,
             no_open,

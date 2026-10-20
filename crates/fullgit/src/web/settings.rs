@@ -92,7 +92,10 @@ fn button(field: &str, label: &str, text: &str, class: &str) -> String {
 pub fn labels(ctx: &PageContext, req: &ParsedRequest) -> Result<HandlerResult> {
     let signer = ctx.signer()?;
     let (repo, trust) = (ctx.repo, &ctx.trust);
-    let msg = match (req.form_field("add").map(str::trim), req.form_field("remove")) {
+    let msg = match (
+        req.form_field("add").map(str::trim),
+        req.form_field("remove"),
+    ) {
         (Some(l), None) if !l.is_empty() => {
             policy::label_add(repo, trust, signer, l)?;
             format!("Added {l}. Sync shares it.")
@@ -103,5 +106,9 @@ pub fn labels(ctx: &PageContext, req: &ParsedRequest) -> Result<HandlerResult> {
         }
         _ => bail!("name a label to add or remove"),
     };
-    Ok(HandlerResult::Redirect(with_param("/settings", "msg", &msg)))
+    Ok(HandlerResult::Redirect(with_param(
+        "/settings",
+        "msg",
+        &msg,
+    )))
 }

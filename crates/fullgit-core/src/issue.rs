@@ -153,7 +153,9 @@ impl Model for Issue {
             (true, kind) => return Err(format!("{kind} cannot open an issue")),
             (false, "issue.edit") => {
                 moderate("edit")?;
-                let title = payload::optional_string(p, "title")?.map(title).transpose()?;
+                let title = payload::optional_string(p, "title")?
+                    .map(title)
+                    .transpose()?;
                 let body = payload::optional_string(p, "body")?;
                 if title.is_none() && body.is_none() {
                     return Err("nothing to edit".into());

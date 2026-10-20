@@ -168,7 +168,11 @@ fn label_picker(ctx: &PageContext, current: &BTreeSet<String>) -> String {
 /// The labels a form picked, from [`label_picker`].
 fn chosen_labels(ctx: &PageContext, req: &ParsedRequest) -> Result<Vec<String>> {
     if issue::available(&ctx.trust).is_some() {
-        return Ok(req.form_fields("label").into_iter().map(str::to_owned).collect());
+        return Ok(req
+            .form_fields("label")
+            .into_iter()
+            .map(str::to_owned)
+            .collect());
     }
     let labels: Vec<String> = req
         .form_field("labels")
@@ -491,7 +495,14 @@ pub fn handle_action(
         }
         "edit-comment" => {
             let comment = Oid::from_str(req.require_form_field("comment")?)?;
-            issue::edit_comment(repo, trust, signer, id, comment, req.require_form_field("body")?)?;
+            issue::edit_comment(
+                repo,
+                trust,
+                signer,
+                id,
+                comment,
+                req.require_form_field("body")?,
+            )?;
             "Comment saved."
         }
         other => bail!("unknown action {other}"),

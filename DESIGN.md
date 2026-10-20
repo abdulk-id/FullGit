@@ -1,6 +1,6 @@
 # FullGit — design
 
-Status: **draft, Phase 8**.
+Status: **draft, Phase 9**.
 
 ## Goals
 
@@ -314,6 +314,21 @@ Commit timestamps are informational only and never used for ordering.
   from its terminal. Signing uses that key in-process. Sync, fetch and push give the same passphrase to ssh through
   a program, so a protected key doesn't hang the browser.
 
+## GitHub bridge
+
+One-way. `fullgit github import` reads a GitHub repository's issues and pull requests and remakes them as fullgit
+entities. Nothing is written back. Running it again updates the ones it created: title, description, labels, status,
+and the comments it imported. Comments added in fullgit stay, and so does a comment GitHub has since deleted.
+
+The person who imports signs every operation, so they are the author where a permission check looks. GitHub's author
+is named in the text. Review verdicts are copied as comments, not as reviews: an approval has to be signed by the
+reviewer, and one signer can't stand in for several.
+
+GitHub labels get a hyphen in place of each space or comma, and are added to the policy when the importer is a
+maintainer. A pull request's commits are fetched (`refs/pull/N/head`, and the target branch) and kept like any other
+pull request's. The range's base is the merge base with the target. A merged pull request is recorded as merged when
+that merge commit is in the clone; otherwise it is closed. `fullgit sync` still does the sharing.
+
 ## Implementation
 
 - Rust workspace:
@@ -336,7 +351,7 @@ Commit timestamps are informational only and never used for ordering.
 | 5. Issues | CLI: create, list, show, comment, close | done (2026-10-17) |
 | 6. PRs + review | Revisions, line comments, approvals, merge | done (2026-10-17) |
 | 7. Web UI | `fullgit web`: browse, discuss, review, merge | done (2026-10-17) |
-| 8. GitHub bridge | Import and mirror GitHub issues and pull requests | |
+| 8. GitHub bridge | Import GitHub issues and pull requests, one-way | done (2026-10-20) |
 | 9. Reach | Server hook rejecting invalid operations; GitLab later | |
 
 ## Open questions

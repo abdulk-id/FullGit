@@ -493,7 +493,10 @@ pub(crate) fn range(
 
 fn merge(repo: &Repository, id: &str, remote: &str) -> Result<()> {
     let id = pr::resolve(repo, id)?;
-    println!("{}", merge_now(repo, &signer_from_git_config(repo)?, id, remote)?);
+    println!(
+        "{}",
+        merge_now(repo, &signer_from_git_config(repo)?, id, remote)?
+    );
     Ok(())
 }
 

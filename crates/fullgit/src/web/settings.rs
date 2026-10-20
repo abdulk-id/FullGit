@@ -6,11 +6,11 @@ use std::fmt::Write;
 use anyhow::{Result, bail};
 use fullgit_core::{Role, issue, policy};
 
-use super::html::{back, esc};
+use super::html::{back, escape_for_html};
 use super::issues::label;
-use super::{Ctx, Req, Resp, with_param};
+use super::{HandlerResult, PageContext, ParsedRequest, with_param};
 
-pub fn show(ctx: &Ctx, req: &Req) -> Result<Resp> {
+pub fn show(ctx: &PageContext, req: &ParsedRequest) -> Result<HandlerResult> {
     let mut b = String::from(
         r#"<h1>Settings</h1><div class="box"><div class="hd"><b>Labels</b></div><div class="bd pad">"#,
     );
@@ -71,7 +71,7 @@ pub fn show(ctx: &Ctx, req: &Req) -> Result<Resp> {
             let _ = write!(
                 b,
                 r#"<tr><td><span class="label">{}</span></td><td class="meta">{n} issue(s)</td><td>{add}</td></tr>"#,
-                esc(l)
+                escape_for_html(l)
             );
         }
         b.push_str("</table>");
@@ -85,14 +85,14 @@ fn button(field: &str, label: &str, text: &str, class: &str) -> String {
     format!(
         r#"<form class="inline" method="post" action="/settings/labels">{}<input type="hidden" name="{field}" value="{}"><button class="btn{class}">{text}</button></form>"#,
         back("/settings"),
-        esc(label)
+        escape_for_html(label)
     )
 }
 
-pub fn labels(ctx: &Ctx, req: &Req) -> Result<Resp> {
+pub fn labels(ctx: &PageContext, req: &ParsedRequest) -> Result<HandlerResult> {
     let signer = ctx.signer()?;
     let (repo, trust) = (ctx.repo, &ctx.trust);
-    let msg = match (req.field("add").map(str::trim), req.field("remove")) {
+    let msg = match (req.form_field("add").map(str::trim), req.form_field("remove")) {
         (Some(l), None) if !l.is_empty() => {
             policy::label_add(repo, trust, signer, l)?;
             format!("Added {l}. Sync shares it.")
@@ -103,5 +103,5 @@ pub fn labels(ctx: &Ctx, req: &Req) -> Result<Resp> {
         }
         _ => bail!("name a label to add or remove"),
     };
-    Ok(Resp::Redirect(with_param("/settings", "msg", &msg)))
+    Ok(HandlerResult::Redirect(with_param("/settings", "msg", &msg)))
 }

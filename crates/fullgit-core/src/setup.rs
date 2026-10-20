@@ -17,8 +17,8 @@ pub const HOOKS: [&str; 2] = ["pre-commit", "pre-push"];
 /// The filter is `required`: if sealing fails, `git add` fails instead of
 /// storing plaintext. Smudge never fails; it leaves files sealed instead.
 pub fn install_drivers(repo: &Repository, exe: &Path) -> Result<()> {
-    let exe = sh_quote(&exe.display().to_string());
-    let mut config = repo.config()?;
+    let exe: String = sh_quote(&exe.display().to_string());
+    let mut config: git2::Config = repo.config()?;
     config.set_str(
         &format!("filter.{DRIVER}.process"),
         &format!("{exe} filter-process"),
@@ -53,8 +53,8 @@ pub fn install_hook(repo: &Repository, name: &str, exe: &Path) -> Result<Hook> {
             "core.hooksPath is set; call `fullgit hook {name}` from your {name} hook"
         )));
     };
-    let path = dir.join(name);
-    let script = format!(
+    let path: PathBuf = dir.join(name);
+    let script: String = format!(
         "#!/bin/sh\n{HOOK_MARKER} `fullgit init` rewrites this file.\nexec {} hook {name} \"$@\"\n",
         sh_quote(&exe.display().to_string())
     );

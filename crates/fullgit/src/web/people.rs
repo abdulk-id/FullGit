@@ -11,11 +11,11 @@ use fullgit_core::identity::Identity;
 use fullgit_core::{Role, policy};
 use git2::Oid;
 
-use super::html::{avatar, back, esc, url_encode};
-use super::{Ctx, Req, Resp, with_param};
+use super::html::{avatar, back, escape_for_html, url_encode};
+use super::{HandlerResult, PageContext, ParsedRequest, with_param};
 
-pub fn show(ctx: &Ctx, req: &Req) -> Result<Resp> {
-    let q = req.q("q").map(str::trim).filter(|q| !q.is_empty());
+pub fn show(ctx: &PageContext, req: &ParsedRequest) -> Result<HandlerResult> {
+    let q = req.query_param("q").map(str::trim).filter(|q| !q.is_empty());
     let back_to = here(q);
     let mut b = String::from("<h1>People</h1>");
     if ctx.me.is_none() {
@@ -35,7 +35,7 @@ pub fn show(ctx: &Ctx, req: &Req) -> Result<Resp> {
     let _ = write!(
         b,
         r#"<form class="search" method="get" action="/people"><input type="text" name="q" value="{}" placeholder="Search by name" aria-label="Search by name"><button class="btn">Search</button></form>"#,
-        esc(q.unwrap_or(""))
+        escape_for_html(q.unwrap_or(""))
     );
     b.push_str(r#"<div class="list"><div class="head"><b>All people</b></div>"#);
     let people = others(ctx, q);
@@ -66,7 +66,7 @@ fn here(q: Option<&str>) -> String {
 }
 
 /// Everyone except you, owners first, filtered by name when `q` is set.
-fn others<'a>(ctx: &'a Ctx, q: Option<&str>) -> Vec<(Oid, &'a Identity)> {
+fn others<'a>(ctx: &'a PageContext, q: Option<&str>) -> Vec<(Oid, &'a Identity)> {
     let q = q.map(str::to_lowercase);
     let mut people: Vec<_> = ctx
         .trust
@@ -91,17 +91,17 @@ fn others<'a>(ctx: &'a Ctx, q: Option<&str>) -> Vec<(Oid, &'a Identity)> {
 
 /// One person. `you` pins them as "You" and always shows how many keys they have.
 /// Everyone else's key count is shown only to an owner.
-fn entry(ctx: &Ctx, id: Oid, person: &Identity, you: bool, back_to: &str) -> String {
+fn entry(ctx: &PageContext, id: Oid, person: &Identity, you: bool, back_to: &str) -> String {
     let who = match you {
         true => format!(
             r#"{}<b>You</b> <span class="sub">{}</span>"#,
             avatar(&person.name, Some(id)),
-            esc(&person.name)
+            escape_for_html(&person.name)
         ),
         false => format!(
             "{}<b>{}</b>",
             avatar(&person.name, Some(id)),
-            esc(&person.name)
+            escape_for_html(&person.name)
         ),
     };
     let keys = match you || ctx.can(Role::Owner) {
@@ -114,12 +114,12 @@ fn entry(ctx: &Ctx, id: Oid, person: &Identity, you: bool, back_to: &str) -> Str
     format!(
         r#"<div class="person"><div class="who">{who}</div><div class="mail">{}</div><div class="role">{}</div>{keys}{}</div>"#,
         veil(&person.email, id),
-        esc(&role_label(ctx, id)),
+        escape_for_html(&role_label(ctx, id)),
         menu(ctx, id, back_to),
     )
 }
 
-fn role_label(ctx: &Ctx, id: Oid) -> String {
+fn role_label(ctx: &PageContext, id: Oid) -> String {
     match ctx.trust.role(id) {
         Some(role) => role.as_str().to_owned(),
         None => "no role".to_owned(),
@@ -138,8 +138,8 @@ fn keys_label(n: usize) -> String {
 fn veil(email: &str, id: Oid) -> String {
     format!(
         r#"<label class="veil"><input type="checkbox" aria-label="Show email"><span class="masked"><span class="blur">{}</span><span class="tip">Click to reveal email</span></span><span class="clear">{}<span class="tip">Click to hide email</span></span></label>"#,
-        esc(&mask(email.chars().count(), id)),
-        esc(email),
+        escape_for_html(&mask(email.chars().count(), id)),
+        escape_for_html(email),
     )
 }
 
@@ -156,7 +156,7 @@ fn mask(len: usize, id: Oid) -> String {
 }
 
 /// The role menu. Only an owner may change the policy, so only an owner sees it.
-fn menu(ctx: &Ctx, id: Oid, back_to: &str) -> String {
+fn menu(ctx: &PageContext, id: Oid, back_to: &str) -> String {
     if !ctx.can(Role::Owner) {
         return String::new();
     }
@@ -182,12 +182,12 @@ fn menu(ctx: &Ctx, id: Oid, back_to: &str) -> String {
     )
 }
 
-pub fn set_role(ctx: &Ctx, req: &Req) -> Result<Resp> {
+pub fn set_role(ctx: &PageContext, req: &ParsedRequest) -> Result<HandlerResult> {
     if !ctx.can(Role::Owner) {
         bail!("only an owner can change someone's role");
     }
-    let id = crate::resolve(ctx.repo, &ctx.trust, req.need("identity")?)?;
-    let Some(raw) = req.field("role") else {
+    let id = crate::resolve(ctx.repo, &ctx.trust, req.require_form_field("identity")?)?;
+    let Some(raw) = req.form_field("role") else {
         bail!("name a role, or an empty one to remove it");
     };
     let desired = match raw.trim() {
@@ -209,11 +209,11 @@ pub fn set_role(ctx: &Ctx, req: &Req) -> Result<Resp> {
             format!("Removed {who}'s role. Sync shares it.")
         }
     };
-    Ok(Resp::Redirect(with_param(super::back_of(req), "msg", &msg)))
+    Ok(HandlerResult::Redirect(with_param(super::back_of(req), "msg", &msg)))
 }
 
 /// Groups and branch rules, which used to sit in the overview's people panel.
-fn policy_notes(ctx: &Ctx) -> String {
+fn policy_notes(ctx: &PageContext) -> String {
     let Some((_, p)) = &ctx.trust.policy else {
         return String::new();
     };
@@ -223,11 +223,14 @@ fn policy_notes(ctx: &Ctx) -> String {
     let mut s =
         String::from(r#"<div class="box"><div class="hd"><b>Policy</b></div><div class="bd pad">"#);
     for (group, members) in &p.groups {
-        let names: Vec<_> = members.iter().map(|m| esc(&ctx.who(Some(*m)))).collect();
+        let names: Vec<_> = members
+            .iter()
+            .map(|m| escape_for_html(&ctx.who(Some(*m))))
+            .collect();
         let _ = write!(
             s,
             "<p>Group <b>{}</b>: {}</p>",
-            esc(group),
+            escape_for_html(group),
             names.join(", ")
         );
     }
@@ -235,11 +238,11 @@ fn policy_notes(ctx: &Ctx) -> String {
         let from = rule
             .group
             .as_ref()
-            .map_or(String::new(), |g| format!(" from {}", esc(g)));
+            .map_or(String::new(), |g| format!(" from {}", escape_for_html(g)));
         let _ = write!(
             s,
             r#"<p>Merging into <code class="ref">{}</code> takes {} approval(s){from}.</p>"#,
-            esc(branch),
+            escape_for_html(branch),
             rule.approvals
         );
     }

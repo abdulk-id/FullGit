@@ -27,7 +27,7 @@ use git2::{Oid, Repository};
 use serde_json::{Value, json};
 
 use crate::issue::{text, time, title};
-use crate::model::{self, Ctx, Loaded, Model};
+use crate::model::{self, Loaded, Model, ReplayContext};
 use crate::op::StoredOp;
 use crate::payload;
 use crate::policy::Rule;
@@ -320,7 +320,7 @@ impl Pr {
 
     /// A line comment's place, or `None` for a general comment.
     fn location(&self, p: &Value) -> Result<Option<Location>, String> {
-        let Some(path) = payload::opt_str(p, "path")? else {
+        let Some(path) = payload::optional_string(p, "path")? else {
             if ["revision", "line", "side"]
                 .iter()
                 .any(|k| p.get(k).is_some())
@@ -338,10 +338,10 @@ impl Pr {
             .filter(|n| *n > 0)
             .ok_or("line is not a line number")?;
         Ok(Some(Location {
-            revision: self.revision(payload::oid(p, "revision")?)?,
+            revision: self.revision(payload::required_oid(p, "revision")?)?,
             path: path.to_owned(),
             line,
-            side: payload::opt_str(p, "side")?.map_or(Ok(Side::New), str::parse)?,
+            side: payload::optional_string(p, "side")?.map_or(Ok(Side::New), str::parse)?,
         }))
     }
 }
@@ -349,7 +349,7 @@ impl Pr {
 impl Model for Pr {
     const NAMESPACE: &'static str = "prs";
 
-    fn apply(&mut self, op: &StoredOp, ctx: &Ctx) -> Result<(), String> {
+    fn apply(&mut self, op: &StoredOp, ctx: &ReplayContext) -> Result<(), String> {
         let actor = ctx.actor(op);
         actor.require(Role::Contributor)?;
         let who = actor
@@ -375,13 +375,13 @@ impl Model for Pr {
         let time = time(ctx.repo, op.id);
         let what = match (op.parents.is_empty(), op.op.kind.as_str()) {
             (true, "pr.create") => {
-                let title = title(payload::str(p, "title")?)?;
-                let body = payload::opt_str(p, "body")?.unwrap_or_default();
+                let title = title(payload::required_string(p, "title")?)?;
+                let body = payload::optional_string(p, "body")?.unwrap_or_default();
                 let (source, target) = (branch(p, "source")?, branch(p, "target")?);
                 if source == target {
                     return Err("source and target are the same branch".into());
                 }
-                let (head, base) = (payload::oid(p, "head")?, payload::oid(p, "base")?);
+                let (head, base) = (payload::required_oid(p, "head")?, payload::required_oid(p, "base")?);
                 self.title = title;
                 self.body = body.to_owned();
                 self.source = source;
@@ -400,8 +400,8 @@ impl Model for Pr {
             (true, kind) => return Err(format!("{kind} cannot open a pull request")),
             (false, "pr.edit") => {
                 moderate("edit")?;
-                let title = payload::opt_str(p, "title")?.map(title).transpose()?;
-                let body = payload::opt_str(p, "body")?;
+                let title = payload::optional_string(p, "title")?.map(title).transpose()?;
+                let body = payload::optional_string(p, "body")?;
                 if title.is_none() && body.is_none() {
                     return Err("nothing to edit".into());
                 }
@@ -416,8 +416,8 @@ impl Model for Pr {
             (false, "pr.revise") => {
                 moderate("revise")?;
                 unmerged("revise")?;
-                let (head, base) = (payload::oid(p, "head")?, payload::oid(p, "base")?);
-                let note = payload::opt_str(p, "note")?.unwrap_or_default();
+                let (head, base) = (payload::required_oid(p, "head")?, payload::required_oid(p, "base")?);
+                let note = payload::optional_string(p, "note")?.unwrap_or_default();
                 self.revisions.push(Revision {
                     id: op.id,
                     author: who,
@@ -429,8 +429,8 @@ impl Model for Pr {
                 What::Revised(self.revisions.len() - 1)
             }
             (false, "pr.comment") => {
-                let body = text(payload::str(p, "body")?)?;
-                let (location, reply_to) = match payload::opt_str(p, "reply_to")? {
+                let body = text(payload::required_string(p, "body")?)?;
+                let (location, reply_to) = match payload::optional_string(p, "reply_to")? {
                     None => (self.location(p)?, None),
                     Some(id) => {
                         if p.get("path").is_some() {
@@ -457,8 +457,8 @@ impl Model for Pr {
                 What::Commented(self.comments.len() - 1)
             }
             (false, "pr.comment_edit") => {
-                let id = payload::oid(p, "comment")?;
-                let body = text(payload::str(p, "body")?)?;
+                let id = payload::required_oid(p, "comment")?;
+                let body = text(payload::required_string(p, "body")?)?;
                 let comment = self
                     .comments
                     .iter_mut()
@@ -478,9 +478,9 @@ impl Model for Pr {
                 if Some(who) == author {
                     return Err("authors don't review their own pull requests".into());
                 }
-                let revision = self.revision(payload::oid(p, "revision")?)?;
-                let verdict = payload::str(p, "verdict")?.parse()?;
-                let body = payload::opt_str(p, "body")?.unwrap_or_default();
+                let revision = self.revision(payload::required_oid(p, "revision")?)?;
+                let verdict = payload::required_string(p, "verdict")?.parse()?;
+                let body = payload::optional_string(p, "body")?.unwrap_or_default();
                 self.reviews.push(Review {
                     id: op.id,
                     reviewer: who,
@@ -492,7 +492,7 @@ impl Model for Pr {
                 What::Reviewed(self.reviews.len() - 1)
             }
             (false, "pr.status") => {
-                let status: Status = payload::str(p, "status")?.parse()?;
+                let status: Status = payload::required_string(p, "status")?.parse()?;
                 let verb = match status {
                     Status::Open => "reopen",
                     Status::Closed => "close",
@@ -506,8 +506,8 @@ impl Model for Pr {
             (false, "pr.merge") => {
                 actor.require(Role::Maintainer)?;
                 unmerged("merge")?;
-                let revision = self.revision(payload::oid(p, "revision")?)?;
-                let commit = payload::oid(p, "commit")?;
+                let revision = self.revision(payload::required_oid(p, "revision")?)?;
+                let commit = payload::required_oid(p, "commit")?;
                 self.merged = Some(Merge {
                     by: who,
                     time,
@@ -531,7 +531,7 @@ impl Model for Pr {
 }
 
 fn branch(p: &Value, key: &str) -> Result<String, String> {
-    let name = payload::str(p, key)?;
+    let name = payload::required_string(p, key)?;
     if !git2::Reference::is_valid_name(&format!("refs/heads/{name}")) {
         return Err(format!("{name:?} is not a branch name"));
     }

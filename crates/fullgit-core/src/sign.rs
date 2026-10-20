@@ -32,8 +32,8 @@ pub struct SshKeygenSigner {
 
 impl SshKeygenSigner {
     pub fn new(key_path: impl Into<PathBuf>) -> Result<Self> {
-        let key_path = key_path.into();
-        let pub_path = if key_path.extension().is_some_and(|e| e == "pub") {
+        let key_path: PathBuf = key_path.into();
+        let pub_path: PathBuf = if key_path.extension().is_some_and(|e| e == "pub") {
             key_path.clone()
         } else {
             let mut p = key_path.clone().into_os_string();
@@ -47,7 +47,7 @@ impl SshKeygenSigner {
                 pub_path.display()
             )
         };
-        let public_key = PublicKey::read_openssh_file(&pub_path).map_err(|e| match e {
+        let public_key: PublicKey = PublicKey::read_openssh_file(&pub_path).map_err(|e| match e {
             ssh_key::Error::AlgorithmUnknown => Error::Signature(ed25519_only()),
             e => Error::Signature(format!("reading {}: {e}", pub_path.display())),
         })?;
@@ -118,7 +118,7 @@ impl SshKeygenSigner {
 
     /// Uses the repository's `user.signingkey`, the same key git signs with.
     pub fn from_git_config(repo: &git2::Repository) -> Result<Self> {
-        let key = repo
+        let key: PathBuf = repo
             .config()?
             .get_path("user.signingkey")
             .map_err(|_| Error::Signature("user.signingkey is not set".into()))?;
@@ -134,10 +134,10 @@ impl Signer for SshKeygenSigner {
     fn sign_as(&self, namespace: &str, data: &[u8]) -> Result<String> {
         // Like git: sign a file, and leave stdin alone, so ssh-keygen can ask
         // for a passphrase on the terminal.
-        let dir = tempfile::tempdir()?;
-        let file = dir.path().join("data");
+        let dir: tempfile::TempDir = tempfile::tempdir()?;
+        let file: PathBuf = dir.path().join("data");
         std::fs::write(&file, data)?;
-        let out = Command::new("ssh-keygen")
+        let out: std::process::Output = Command::new("ssh-keygen")
             .args(["-q", "-Y", "sign", "-n", namespace, "-f"])
             .arg(&self.key_path)
             .arg(&file)
@@ -147,8 +147,8 @@ impl Signer for SshKeygenSigner {
             .spawn()?
             .wait_with_output()?;
         if !out.status.success() {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            let mut msg = format!("ssh-keygen -Y sign failed: {}", stderr.trim());
+            let stderr: std::borrow::Cow<str> = String::from_utf8_lossy(&out.stderr);
+            let mut msg: String = format!("ssh-keygen -Y sign failed: {}", stderr.trim());
             if stderr.contains("passphrase") || stderr.contains("askpass") {
                 msg.push_str(
                     "\nthe key needs its passphrase, and there was no terminal to ask on; \
@@ -193,8 +193,8 @@ pub fn verify(data: &[u8], armored: &str) -> Result<KeyData> {
 }
 
 pub fn verify_as(namespace: &str, data: &[u8], armored: &str) -> Result<KeyData> {
-    let sig = SshSig::from_pem(armored).map_err(|e| Error::Signature(e.to_string()))?;
-    let key = sig.public_key().clone();
+    let sig: SshSig = SshSig::from_pem(armored).map_err(|e| Error::Signature(e.to_string()))?;
+    let key: KeyData = sig.public_key().clone();
     PublicKey::from(key.clone())
         .verify(namespace, data, &sig)
         .map_err(|e| Error::Signature(e.to_string()))?;

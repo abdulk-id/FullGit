@@ -10,11 +10,11 @@ use git2::{Oid, Repository};
 use serde_json::json;
 use ssh_key::public::KeyData;
 
-use crate::model::{self, Ctx, Model};
+use crate::model::{self, Model, ReplayContext};
 use crate::op::StoredOp;
 use crate::payload;
 use crate::sign::{self, Signer, key_to_string};
-use crate::trust::{Keep, Trust, keep_from_json, keep_to_json, kept};
+use crate::trust::{RetentionMap, Trust, kept, retention_from_json, retention_to_json};
 use crate::{Error, Result};
 
 /// Signature namespace for proofs of key possession, so a proof can't be
@@ -28,7 +28,7 @@ pub struct Identity {
     /// Current keys, in the order they were added.
     pub keys: Vec<KeyData>,
     /// Removed keys and what each removal kept.
-    pub removed: Vec<(KeyData, Keep)>,
+    pub removed: Vec<(KeyData, RetentionMap)>,
 }
 
 impl Identity {
@@ -58,13 +58,13 @@ impl Model for Identity {
     const NAMESPACE: &'static str = "identities";
     const NEEDS_POLICY: bool = false;
 
-    fn apply(&mut self, op: &StoredOp, ctx: &Ctx) -> Result<(), String> {
-        let p = &op.op.payload;
+    fn apply(&mut self, op: &StoredOp, ctx: &ReplayContext) -> Result<(), String> {
+        let p: &serde_json::Value = &op.op.payload;
         if op.parents.is_empty() {
             if op.op.kind != "identity.create" {
                 return Err(format!("{} cannot create an identity", op.op.kind));
             }
-            let (name, email) = (payload::str(p, "name")?, payload::str(p, "email")?);
+            let (name, email) = (payload::required_string(p, "name")?, payload::required_string(p, "email")?);
             self.name = name.to_owned();
             self.email = email.to_owned();
             self.keys = vec![op.signer.clone()];
@@ -73,8 +73,8 @@ impl Model for Identity {
         self.still_valid(op, ctx)?;
         match op.op.kind.as_str() {
             "identity.edit" => {
-                let name = payload::opt_str(p, "name")?;
-                let email = payload::opt_str(p, "email")?;
+                let name = payload::optional_string(p, "name")?;
+                let email = payload::optional_string(p, "email")?;
                 if let Some(name) = name {
                     self.name = name.to_owned();
                 }
@@ -84,12 +84,12 @@ impl Model for Identity {
             }
             "identity.add_key" => {
                 let key =
-                    sign::key_from_string(payload::str(p, "key")?).map_err(|e| e.to_string())?;
+                    sign::key_from_string(payload::required_string(p, "key")?).map_err(|e| e.to_string())?;
                 if self.keys.contains(&key) {
                     return Err("key is already present".into());
                 }
-                let proof = payload::str(p, "proof")?;
-                let prover = sign::verify_as(
+                let proof: &str = payload::required_string(p, "proof")?;
+                let prover: KeyData = sign::verify_as(
                     PROOF_NAMESPACE,
                     proof_message(ctx.entity, &key).as_bytes(),
                     proof,
@@ -102,8 +102,8 @@ impl Model for Identity {
             }
             "identity.remove_key" => {
                 let key =
-                    sign::key_from_string(payload::str(p, "key")?).map_err(|e| e.to_string())?;
-                let keep = keep_from_json(p)?;
+                    sign::key_from_string(payload::required_string(p, "key")?).map_err(|e| e.to_string())?;
+                let keep: RetentionMap = retention_from_json(p)?;
                 let Some(i) = self.keys.iter().position(|k| *k == key) else {
                     return Err("key is not present".into());
                 };
@@ -118,7 +118,7 @@ impl Model for Identity {
         Ok(())
     }
 
-    fn still_valid(&self, op: &StoredOp, ctx: &Ctx) -> Result<(), String> {
+    fn still_valid(&self, op: &StoredOp, ctx: &ReplayContext) -> Result<(), String> {
         if self.signs(ctx.repo, &op.signer, ctx.entity, op.id) {
             Ok(())
         } else {
@@ -139,7 +139,7 @@ pub fn proof_message(identity: Oid, key: &KeyData) -> String {
 
 /// Signs a proof with `new_key` that it may be added to `identity`.
 pub fn prove(new_key: &dyn Signer, identity: Oid) -> Result<String> {
-    let message = proof_message(identity, new_key.public_key().key_data());
+    let message: String = proof_message(identity, new_key.public_key().key_data());
     new_key.sign_as(PROOF_NAMESPACE, message.as_bytes())
 }
 
@@ -188,13 +188,13 @@ pub fn add_key(
 /// Removes `key`. Operations it signed so far, in this clone, stay
 /// attributed to the identity; anything else it signs no longer is.
 pub fn remove_key(repo: &Repository, id: Oid, signer: &dyn Signer, key: &KeyData) -> Result<Oid> {
-    let keep = crate::trust::keep_for(repo, std::slice::from_ref(key))?;
+    let retention: RetentionMap = crate::trust::retention_for(repo, std::slice::from_ref(key))?;
     update(
         repo,
         id,
         signer,
         "identity.remove_key",
-        json!({ "key": key_to_string(key), "keep": keep_to_json(&keep) }),
+        json!({ "key": key_to_string(key), "keep": retention_to_json(&retention) }),
     )
 }
 

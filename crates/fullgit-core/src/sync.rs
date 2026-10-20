@@ -45,16 +45,16 @@ pub struct Report {
 /// `signer` is only needed to merge diverged entities. Without it, diverged
 /// entities are reported as rejected and left for later.
 pub fn sync(repo: &Repository, remote: &str, signer: Option<&dyn Signer>) -> Result<Report> {
-    let mut report = Report::default();
+    let mut report: Report = Report::default();
     for _ in 0..MAX_ROUNDS {
         fetch(repo, remote)?;
         merge_tracking(repo, remote, signer, &mut report)?;
-        let skip = report
+        let skip: Vec<&str> = report
             .refs
             .iter()
-            .filter(|(_, o)| matches!(o, Outcome::Rejected(_)))
-            .map(|(r, _)| r.as_str())
-            .collect::<Vec<_>>();
+            .filter(|(_, outcome)| matches!(outcome, Outcome::Rejected(_)))
+            .map(|(refname, _)| refname.as_str())
+            .collect();
         if push(repo, remote, &skip)? {
             report.pushed = true;
             return Ok(report);
@@ -82,15 +82,15 @@ pub fn fetch(repo: &Repository, remote: &str) -> Result<()> {
 /// forcing. Returns `false` if the remote rejected any ref (e.g. someone
 /// else pushed first); the caller should fetch and merge again.
 pub fn push(repo: &Repository, remote: &str, skip: &[&str]) -> Result<bool> {
-    let mut names = Vec::new();
+    let mut refnames: Vec<String> = Vec::new();
     for r in repo.references_glob(&format!("{}*", refs::PREFIX))? {
         if let Ok(name) = r?.name()
             && !skip.contains(&name)
         {
-            names.push(name.to_owned());
+            refnames.push(name.to_owned());
         }
     }
-    push_refs(repo, remote, &names)
+    push_refs(repo, remote, &refnames)
 }
 
 /// Pushes the named local refs to the same names, without forcing. Returns
@@ -106,12 +106,12 @@ pub fn push_specs(repo: &Repository, remote: &str, specs: &[String]) -> Result<b
     if specs.is_empty() {
         return Ok(true);
     }
-    let mut args = vec!["push", "--porcelain", remote];
+    let mut args: Vec<&str> = vec!["push", "--porcelain", remote];
     args.extend(specs.iter().map(String::as_str));
-    let out = git_output(repo, &args)?;
+    let out: std::process::Output = git_output(repo, &args)?;
     // Porcelain lines start with a flag; `!` means rejected.
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let rejected = stdout.lines().any(|l| l.starts_with('!'));
+    let stdout: std::borrow::Cow<str> = String::from_utf8_lossy(&out.stdout);
+    let rejected: bool = stdout.lines().any(|line| line.starts_with('!'));
     if !out.status.success() && !rejected {
         return Err(git_error("push", &out));
     }
@@ -125,26 +125,26 @@ pub fn merge_tracking(
     signer: Option<&dyn Signer>,
     report: &mut Report,
 ) -> Result<()> {
-    let tracking = refs::remote_tracking_prefix(remote);
-    let mut fetched = Vec::new();
+    let tracking: String = refs::remote_tracking_prefix(remote);
+    let mut fetched: Vec<(String, Oid)> = Vec::new();
     for r in repo.references_glob(&format!("{tracking}*"))? {
-        let r = r?;
-        if let (Ok(name), Some(id)) = (r.name(), r.target()) {
-            let local = format!("{}{}", refs::PREFIX, &name[tracking.len()..]);
-            fetched.push((local, id));
+        let r: git2::Reference = r?;
+        if let (Ok(name), Some(remote_head)) = (r.name(), r.target()) {
+            let local_ref: String = format!("{}{}", refs::PREFIX, &name[tracking.len()..]);
+            fetched.push((local_ref, remote_head));
         }
     }
 
-    for (local, remote_head) in fetched {
-        if local.starts_with(refs::CODE_PREFIX) {
+    for (local_ref, remote_head) in fetched {
+        if local_ref.starts_with(refs::CODE_PREFIX) {
             report
                 .refs
-                .insert(local.clone(), code(repo, &local, remote_head)?);
+                .insert(local_ref.clone(), code(repo, &local_ref, remote_head)?);
             continue;
         }
-        let outcome = match check(repo, &local, remote_head) {
+        let outcome: Outcome = match check(repo, &local_ref, remote_head) {
             Err(reason) => Outcome::Rejected(reason),
-            Ok(()) => match entity::merge(repo, &local, signer, remote_head) {
+            Ok(()) => match entity::merge(repo, &local_ref, signer, remote_head) {
                 Ok(Merged::Created(_)) => Outcome::New,
                 Ok(Merged::UpToDate(_)) => Outcome::UpToDate,
                 Ok(Merged::FastForwarded(_)) => Outcome::FastForwarded,
@@ -153,25 +153,25 @@ pub fn merge_tracking(
                 Err(e) => return Err(e),
             },
         };
-        report.refs.insert(local, outcome);
+        report.refs.insert(local_ref, outcome);
     }
     Ok(())
 }
 
 /// Takes a code ref if it names its own target. Nothing else about it needs
 /// checking: it only matters once a signed pull request names its commit.
-fn code(repo: &Repository, local: &str, remote_head: Oid) -> Result<Outcome> {
-    let named = &local[refs::CODE_PREFIX.len()..];
+fn code(repo: &Repository, local_ref: &str, remote_head: Oid) -> Result<Outcome> {
+    let named: &str = &local_ref[refs::CODE_PREFIX.len()..];
     if named != remote_head.to_string() {
         return Ok(Outcome::Rejected(format!("points at {remote_head}")));
     }
     if repo.find_commit(remote_head).is_err() {
         return Ok(Outcome::Rejected("not a commit".into()));
     }
-    if repo.refname_to_id(local).is_ok() {
+    if repo.refname_to_id(local_ref).is_ok() {
         return Ok(Outcome::UpToDate);
     }
-    repo.reference(local, remote_head, false, "fullgit: code")?;
+    repo.reference(local_ref, remote_head, false, "fullgit: code")?;
     Ok(Outcome::New)
 }
 
@@ -179,18 +179,18 @@ fn code(repo: &Repository, local: &str, remote_head: Oid) -> Result<Outcome> {
 /// local ref: every operation must be validly signed with consistent clocks,
 /// the DAG must have a single root, and for `<namespace>/<id>` refs that
 /// root must be `<id>`.
-fn check(repo: &Repository, local: &str, remote_head: Oid) -> Result<(), String> {
-    let mut heads = vec![remote_head];
-    heads.extend(repo.refname_to_id(local).ok());
-    let ops = entity::load(repo, &heads).map_err(|e| e.to_string())?;
-    let roots: Vec<_> = ops.iter().filter(|o| o.parents.is_empty()).collect();
+fn check(repo: &Repository, local_ref: &str, remote_head: Oid) -> Result<(), String> {
+    let mut heads: Vec<Oid> = vec![remote_head];
+    heads.extend(repo.refname_to_id(local_ref).ok());
+    let ops: Vec<crate::StoredOp> = entity::load(repo, &heads).map_err(|e| e.to_string())?;
+    let roots: Vec<&crate::StoredOp> = ops.iter().filter(|o| o.parents.is_empty()).collect();
     if roots.len() != 1 {
         return Err(format!(
             "expected one root operation, found {}",
             roots.len()
         ));
     }
-    let last = local.rsplit('/').next().unwrap_or_default();
+    let last: &str = local_ref.rsplit('/').next().unwrap_or_default();
     if let Ok(id) = Oid::from_str(last)
         && last.len() == 40
         && roots[0].id != id

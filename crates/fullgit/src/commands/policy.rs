@@ -6,7 +6,7 @@ use fullgit_core::{Role, Trust, policy};
 use git2::Repository;
 
 use crate::commands::pr::tip;
-use crate::{describe, me, resolve};
+use crate::{current_user_with_signer, describe, resolve_identity};
 
 /// Identities are named by `me`, an email, or an id prefix.
 #[derive(Subcommand)]
@@ -68,6 +68,7 @@ pub enum GroupCmd {
     Remove { group: String, who: String },
 }
 
+/// Runs a `fullgit policy` subcommand.
 pub fn run(repo: &Repository, cmd: PolicyCmd) -> Result<()> {
     match cmd {
         PolicyCmd::Init { owners } => {
@@ -75,10 +76,10 @@ pub fn run(repo: &Repository, cmd: PolicyCmd) -> Result<()> {
                 bail!("this repository already has policy {root}");
             }
             let trust = Trust::load_identities(repo)?;
-            let (signer, me) = me(repo, &trust)?;
-            let mut ids = vec![me];
+            let (signer, my_id) = current_user_with_signer(repo, &trust)?;
+            let mut ids: Vec<git2::Oid> = vec![my_id];
             for who in &owners {
-                ids.push(resolve(repo, &trust, who)?);
+                ids.push(resolve_identity(repo, &trust, who)?);
             }
             let root = policy::genesis(repo, &trust, &signer, &ids)?;
             let path = policy::write_root_file(repo, root)?;
@@ -126,15 +127,15 @@ pub fn run(repo: &Repository, cmd: PolicyCmd) -> Result<()> {
         }
         PolicyCmd::Grant { who, role } => {
             let trust = Trust::load(repo)?;
-            let (signer, _) = me(repo, &trust)?;
-            let id = resolve(repo, &trust, &who)?;
+            let (signer, _) = current_user_with_signer(repo, &trust)?;
+            let id: git2::Oid = resolve_identity(repo, &trust, &who)?;
             policy::grant(repo, &trust, &signer, id, role)?;
             println!("{} is now {role}", describe(&trust, id));
         }
         PolicyCmd::Revoke { who } => {
             let trust = Trust::load(repo)?;
-            let (signer, _) = me(repo, &trust)?;
-            let id = resolve(repo, &trust, &who)?;
+            let (signer, _) = current_user_with_signer(repo, &trust)?;
+            let id: git2::Oid = resolve_identity(repo, &trust, &who)?;
             policy::revoke(repo, &trust, &signer, id)?;
             println!(
                 "revoked {}; operations they signed that this clone has already seen stay valid",
@@ -151,7 +152,7 @@ pub fn run(repo: &Repository, cmd: PolicyCmd) -> Result<()> {
                 bail!("use `fullgit policy unprotect {branch}`");
             }
             let trust = Trust::load(repo)?;
-            let (signer, _) = me(repo, &trust)?;
+            let (signer, _) = current_user_with_signer(repo, &trust)?;
             // Changing a rule keeps where it began.
             let since = match trust
                 .policy
@@ -174,27 +175,27 @@ pub fn run(repo: &Repository, cmd: PolicyCmd) -> Result<()> {
         }
         PolicyCmd::Unprotect { branch } => {
             let trust = Trust::load(repo)?;
-            let (signer, _) = me(repo, &trust)?;
+            let (signer, _) = current_user_with_signer(repo, &trust)?;
             policy::protect(repo, &trust, &signer, &branch, 0, None, None)?;
             println!("{branch} has no merge rule");
         }
         PolicyCmd::Group(cmd) => {
             let trust = Trust::load(repo)?;
-            let (signer, _) = me(repo, &trust)?;
+            let (signer, _) = current_user_with_signer(repo, &trust)?;
             match cmd {
                 GroupCmd::Add { group, who } => {
-                    let id = resolve(repo, &trust, &who)?;
+                    let id: git2::Oid = resolve_identity(repo, &trust, &who)?;
                     policy::group_add(repo, &trust, &signer, &group, id)?;
                 }
                 GroupCmd::Remove { group, who } => {
-                    let id = resolve(repo, &trust, &who)?;
+                    let id: git2::Oid = resolve_identity(repo, &trust, &who)?;
                     policy::group_remove(repo, &trust, &signer, &group, id)?;
                 }
             }
         }
         PolicyCmd::Label(cmd) => {
             let trust = Trust::load(repo)?;
-            let (signer, _) = me(repo, &trust)?;
+            let (signer, _) = current_user_with_signer(repo, &trust)?;
             let (labels, add) = match cmd {
                 LabelCmd::Add { labels } => (labels, true),
                 LabelCmd::Remove { labels } => (labels, false),

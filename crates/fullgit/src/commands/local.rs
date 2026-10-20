@@ -1,4 +1,4 @@
-//! `fullgit local`: per-user files.
+//! `fullgit local`: per-user files encrypted in your own snapshot ref.
 
 use std::path::{Path, PathBuf};
 
@@ -10,7 +10,7 @@ use fullgit_core::{Trust, sign};
 use git2::Repository;
 
 use crate::commands::secret::repo_relative;
-use crate::{date, me, short};
+use crate::{current_user_with_signer, date, short_oid};
 
 #[derive(Subcommand)]
 pub enum LocalCmd {
@@ -43,6 +43,7 @@ pub enum LocalCmd {
     Log,
 }
 
+/// Runs a `fullgit local` subcommand.
 pub fn run(repo: &Repository, cmd: LocalCmd) -> Result<()> {
     match cmd {
         LocalCmd::Add { paths } => {
@@ -62,15 +63,15 @@ pub fn run(repo: &Repository, cmd: LocalCmd) -> Result<()> {
         }
         LocalCmd::List => {
             let trust = Trust::load_identities(repo)?;
-            let (_, me) = me(repo, &trust)?;
-            let history = local::history(repo, &trust, me)?;
-            let state = local::state(repo, me)?;
+            let (_, my_id) = current_user_with_signer(repo, &trust)?;
+            let history = local::history(repo, &trust, my_id)?;
+            let state = local::state(repo, my_id)?;
             let declared = local::declared(repo)?;
             let files = local::collect(repo, &declared.files)?;
             match history.latest() {
                 Some(s) => println!(
                     "snapshot {} saved {} by key {}",
-                    short(s.id),
+                    short_oid(s.id),
                     date(s.time),
                     sign::fingerprint(&s.signer)
                 ),
@@ -96,15 +97,15 @@ pub fn run(repo: &Repository, cmd: LocalCmd) -> Result<()> {
         }
         LocalCmd::Save { force } => {
             let trust = Trust::load_identities(repo)?;
-            let (signer, me) = me(repo, &trust)?;
+            let (signer, my_id) = current_user_with_signer(repo, &trust)?;
             for path in local::declared(repo)?.tracked {
                 eprintln!("warning: {path} is tracked by git, so not saved");
             }
-            match local::save(repo, &trust, &signer, me, force)? {
+            match local::save(repo, &trust, &signer, my_id, force)? {
                 Saved::UpToDate => println!("up to date"),
                 Saved::Saved { id, files } => println!(
                     "saved {files} file(s) as snapshot {}; `fullgit sync` pushes it",
-                    short(id)
+                    short_oid(id)
                 ),
                 Saved::Behind => bail!(
                     "your per-user files were saved from another device since this clone last \
@@ -115,8 +116,8 @@ pub fn run(repo: &Repository, cmd: LocalCmd) -> Result<()> {
         }
         LocalCmd::Restore { force, from } => {
             let trust = Trust::load_identities(repo)?;
-            let (_, me) = me(repo, &trust)?;
-            let history = local::history(repo, &trust, me)?;
+            let (_, my_id) = current_user_with_signer(repo, &trust)?;
+            let history = local::history(repo, &trust, my_id)?;
             let head = history
                 .head
                 .context("you have no snapshot yet; `fullgit local save` makes one")?;
@@ -142,11 +143,11 @@ pub fn run(repo: &Repository, cmd: LocalCmd) -> Result<()> {
                 anyhow!(
                     "can't open snapshot {}: {why}\nit is encrypted to {}; on a device holding \
                      one of those, `fullgit local save` re-encrypts it to all your current keys",
-                    short(snapshot.id),
+                    short_oid(snapshot.id),
                     snapshot.recipients.join(", ")
                 )
             })?;
-            let r = local::restore(repo, me, head, &files, force)?;
+            let r = local::restore(repo, my_id, head, &files, force)?;
             for p in &r.written {
                 println!("restored  {p}");
             }
@@ -171,12 +172,12 @@ pub fn run(repo: &Repository, cmd: LocalCmd) -> Result<()> {
         }
         LocalCmd::Log => {
             let trust = Trust::load_identities(repo)?;
-            let (_, me) = me(repo, &trust)?;
-            let history = local::history(repo, &trust, me)?;
+            let (_, my_id) = current_user_with_signer(repo, &trust)?;
+            let history = local::history(repo, &trust, my_id)?;
             for s in history.snapshots.iter().rev() {
                 println!(
                     "{}  {}  key {}",
-                    short(s.id),
+                    short_oid(s.id),
                     date(s.time),
                     sign::fingerprint(&s.signer)
                 );

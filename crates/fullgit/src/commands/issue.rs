@@ -7,7 +7,7 @@ use fullgit_core::issue::{self, Issue, Status, What};
 use fullgit_core::model::{self, Abbrev};
 use git2::{Oid, Repository};
 
-use crate::{date, me, resolve, short};
+use crate::{current_user_with_signer, date, resolve_identity, short_oid};
 
 /// Issues are named by a prefix of their id, as `fullgit issue list` shows.
 #[derive(Subcommand)]
@@ -93,6 +93,7 @@ pub enum IssueCmd {
     },
 }
 
+/// Runs a `fullgit issue` subcommand.
 pub fn run(repo: &Repository, cmd: IssueCmd) -> Result<()> {
     let trust = Trust::load(repo)?;
     match cmd {
@@ -101,7 +102,7 @@ pub fn run(repo: &Repository, cmd: IssueCmd) -> Result<()> {
             body,
             labels,
         } => {
-            let (signer, _) = me(repo, &trust)?;
+            let (signer, _) = current_user_with_signer(repo, &trust)?;
             let (title, body) = match title {
                 Some(t) => (t, body.unwrap_or_default()),
                 None => {
@@ -123,8 +124,12 @@ pub fn run(repo: &Repository, cmd: IssueCmd) -> Result<()> {
             assignee,
             author,
         } => {
-            let assignee = assignee.map(|w| resolve(repo, &trust, &w)).transpose()?;
-            let author = author.map(|w| resolve(repo, &trust, &w)).transpose()?;
+            let assignee: Option<Oid> = assignee
+                .map(|w| resolve_identity(repo, &trust, &w))
+                .transpose()?;
+            let author: Option<Oid> = author
+                .map(|w| resolve_identity(repo, &trust, &w))
+                .transpose()?;
             let names = model::abbrev::<Issue>(repo)?;
             let mut shown = Vec::new();
             for (id, loaded) in issue::all(repo, &trust)? {
@@ -171,12 +176,12 @@ pub fn run(repo: &Repository, cmd: IssueCmd) -> Result<()> {
                 eprintln!();
                 eprintln!("ignored {} operation(s):", loaded.rejected.len());
                 for r in &loaded.rejected {
-                    eprintln!("  {}: {}", short(r.op), r.reason);
+                    eprintln!("  {}: {}", short_oid(r.op), r.reason);
                 }
             }
         }
         IssueCmd::Comment { id, body } => {
-            let (signer, _) = me(repo, &trust)?;
+            let (signer, _) = current_user_with_signer(repo, &trust)?;
             let id = issue::resolve(repo, &id)?;
             let body = match body {
                 Some(b) => b,
@@ -185,7 +190,7 @@ pub fn run(repo: &Repository, cmd: IssueCmd) -> Result<()> {
             issue::comment(repo, &trust, &signer, id, &body)?;
         }
         IssueCmd::Edit { id, title, body } => {
-            let (signer, _) = me(repo, &trust)?;
+            let (signer, _) = current_user_with_signer(repo, &trust)?;
             let id = issue::resolve(repo, &id)?;
             let (title, body) = match (title, body) {
                 (None, None) => {
@@ -210,7 +215,7 @@ pub fn run(repo: &Repository, cmd: IssueCmd) -> Result<()> {
             issue::edit(repo, &trust, &signer, id, title.as_deref(), body.as_deref())?;
         }
         IssueCmd::EditComment { id, comment, body } => {
-            let (signer, _) = me(repo, &trust)?;
+            let (signer, _) = current_user_with_signer(repo, &trust)?;
             let id = issue::resolve(repo, &id)?;
             let current = issue::load(repo, &trust, id)?.model;
             let found: Vec<_> = current
@@ -242,7 +247,7 @@ pub fn run(repo: &Repository, cmd: IssueCmd) -> Result<()> {
             for l in labels.iter().chain(&remove) {
                 issue::valid_label(l).map_err(anyhow::Error::msg)?;
             }
-            let (signer, _) = me(repo, &trust)?;
+            let (signer, _) = current_user_with_signer(repo, &trust)?;
             let id = issue::resolve(repo, &id)?;
             issue::label(repo, &trust, &signer, id, &labels, &remove)?;
         }
@@ -250,15 +255,15 @@ pub fn run(repo: &Repository, cmd: IssueCmd) -> Result<()> {
             if who.is_empty() && remove.is_empty() {
                 bail!("name people to assign, or --remove them");
             }
-            let (signer, _) = me(repo, &trust)?;
+            let (signer, _) = current_user_with_signer(repo, &trust)?;
             let id = issue::resolve(repo, &id)?;
             let add = who
                 .iter()
-                .map(|w| resolve(repo, &trust, w))
+                .map(|w| resolve_identity(repo, &trust, w))
                 .collect::<Result<Vec<_>>>()?;
             let remove = remove
                 .iter()
-                .map(|w| resolve(repo, &trust, w))
+                .map(|w| resolve_identity(repo, &trust, w))
                 .collect::<Result<Vec<_>>>()?;
             issue::assign(repo, &trust, &signer, id, &add, &remove)?;
         }
@@ -273,7 +278,7 @@ fn set_status(
     status: Status,
     comment: Option<String>,
 ) -> Result<()> {
-    let (signer, _) = me(repo, trust)?;
+    let (signer, _) = current_user_with_signer(repo, trust)?;
     let id = issue::resolve(repo, id)?;
     if issue::load(repo, trust, id)?.model.status == status {
         bail!("issue {} is already {status}", name(repo, id)?);
@@ -363,7 +368,7 @@ pub(crate) fn who(trust: &Trust, id: Option<Oid>) -> String {
         Some(id) => trust
             .identities
             .get(&id)
-            .map_or_else(|| short(id), |i| i.name.clone()),
+            .map_or_else(|| short_oid(id), |i| i.name.clone()),
         None => "unknown".into(),
     }
 }

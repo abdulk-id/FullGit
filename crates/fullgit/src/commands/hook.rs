@@ -7,8 +7,9 @@ use fullgit_core::local::{self, Saved};
 use fullgit_core::{Trust, guard, refs, sync};
 use git2::{Oid, Repository};
 
-use crate::me;
+use crate::current_user_with_signer;
 
+/// Dispatches a git hook installed by `fullgit init`.
 pub fn run(repo: &Repository, name: &str, args: &[String]) -> Result<()> {
     match name {
         "pre-commit" => {
@@ -84,15 +85,15 @@ fn save_local(repo: &Repository, remote: &str) -> Result<()> {
         return Ok(());
     }
     let trust = Trust::load_identities(repo)?;
-    let (signer, me) = me(repo, &trust)?;
-    match local::save(repo, &trust, &signer, me, false)? {
+    let (signer, my_id) = current_user_with_signer(repo, &trust)?;
+    match local::save(repo, &trust, &signer, my_id, false)? {
         Saved::UpToDate => {}
         Saved::Behind => eprintln!(
             "fullgit: not saving your per-user files: they were saved from another device \
              since; run `fullgit local restore`, then `fullgit local save`"
         ),
         Saved::Saved { files, .. } => {
-            if sync::push_refs(repo, remote, &[local::refname(me)])? {
+            if sync::push_refs(repo, remote, &[local::refname(my_id)])? {
                 eprintln!("fullgit: saved {files} per-user file(s)");
             } else {
                 eprintln!(

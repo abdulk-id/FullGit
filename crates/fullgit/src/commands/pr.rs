@@ -11,7 +11,10 @@ use fullgit_core::{Role, Signer, Trust, sync};
 use git2::{Oid, Repository};
 
 use crate::commands::issue::{editor, print_indented, short_id, split_title, who};
-use crate::{date, identity_of, me, short, signer};
+use crate::{
+    current_user_with_signer, date, identity_of, resolve_identity, short_oid,
+    signer_from_git_config,
+};
 
 /// Pull requests are named by a prefix of their id, as `fullgit pr list`
 /// shows, and revisions by number: 1 is the first.
@@ -151,6 +154,7 @@ pub enum PrCmd {
     },
 }
 
+/// Runs a `fullgit pr` subcommand.
 pub fn run(repo: &Repository, cmd: PrCmd) -> Result<()> {
     if let PrCmd::Merge { id, remote } = cmd {
         return merge(repo, &id, &remote);
@@ -164,7 +168,7 @@ pub fn run(repo: &Repository, cmd: PrCmd) -> Result<()> {
             target,
             remote,
         } => {
-            let (signer, _) = me(repo, &trust)?;
+            let (signer, _) = current_user_with_signer(repo, &trust)?;
             let source = match source {
                 Some(s) => s,
                 None => current_branch(repo).context("not on a branch; pass --source")?,
@@ -205,7 +209,7 @@ pub fn run(repo: &Repository, cmd: PrCmd) -> Result<()> {
             author,
         } => {
             let author = author
-                .map(|w| crate::resolve(repo, &trust, &w))
+                .map(|w| resolve_identity(repo, &trust, &w))
                 .transpose()?;
             let names = model::abbrev::<Pr>(repo)?;
             let mut shown = Vec::new();
@@ -265,7 +269,7 @@ pub fn run(repo: &Repository, cmd: PrCmd) -> Result<()> {
                 eprintln!();
                 eprintln!("ignored {} operation(s):", loaded.rejected.len());
                 for r in &loaded.rejected {
-                    eprintln!("  {}: {}", short(r.op), r.reason);
+                    eprintln!("  {}: {}", short_oid(r.op), r.reason);
                 }
             }
         }
@@ -318,10 +322,10 @@ pub fn run(repo: &Repository, cmd: PrCmd) -> Result<()> {
             head,
             remote,
         } => {
-            let (signer, me) = me(repo, &trust)?;
+            let (signer, my_id) = current_user_with_signer(repo, &trust)?;
             let id = match id {
                 Some(id) => pr::resolve(repo, &id)?,
-                None => mine_here(repo, &trust, me)?,
+                None => mine_here(repo, &trust, my_id)?,
             };
             let p = pr::load(repo, &trust, id)?.model;
             let head = match head {
@@ -359,7 +363,7 @@ pub fn run(repo: &Repository, cmd: PrCmd) -> Result<()> {
             revision,
             reply,
         } => {
-            let (signer, _) = me(repo, &trust)?;
+            let (signer, _) = current_user_with_signer(repo, &trust)?;
             let id = pr::resolve(repo, &id)?;
             let p = pr::load(repo, &trust, id)?.model;
             let side = if old { Side::Old } else { Side::New };
@@ -394,7 +398,7 @@ pub fn run(repo: &Repository, cmd: PrCmd) -> Result<()> {
             pr::comment(repo, &trust, &signer, id, &body, place)?;
         }
         PrCmd::EditComment { id, comment, body } => {
-            let (signer, _) = me(repo, &trust)?;
+            let (signer, _) = current_user_with_signer(repo, &trust)?;
             let id = pr::resolve(repo, &id)?;
             let p = pr::load(repo, &trust, id)?.model;
             let c = find_comment(&p, &comment)?;
@@ -405,7 +409,7 @@ pub fn run(repo: &Repository, cmd: PrCmd) -> Result<()> {
             pr::edit_comment(repo, &trust, &signer, id, c.id, &body)?;
         }
         PrCmd::Edit { id, title, body } => {
-            let (signer, _) = me(repo, &trust)?;
+            let (signer, _) = current_user_with_signer(repo, &trust)?;
             let id = pr::resolve(repo, &id)?;
             let (title, body) = match (title, body) {
                 (None, None) => {
@@ -432,7 +436,7 @@ pub fn run(repo: &Repository, cmd: PrCmd) -> Result<()> {
         PrCmd::Review {
             id, approve, body, ..
         } => {
-            let (signer, _) = me(repo, &trust)?;
+            let (signer, _) = current_user_with_signer(repo, &trust)?;
             let id = pr::resolve(repo, &id)?;
             let p = pr::load(repo, &trust, id)?.model;
             let verdict = if approve {
@@ -489,7 +493,7 @@ pub(crate) fn range(
 
 fn merge(repo: &Repository, id: &str, remote: &str) -> Result<()> {
     let id = pr::resolve(repo, id)?;
-    println!("{}", merge_now(repo, &signer(repo)?, id, remote)?);
+    println!("{}", merge_now(repo, &signer_from_git_config(repo)?, id, remote)?);
     Ok(())
 }
 
@@ -561,7 +565,7 @@ pub(crate) fn merge_now(
         "{done}merged pull request {} into {} as {}; `git pull` brings it here",
         name(repo, id)?,
         p.target,
-        short(commit)
+        short_oid(commit)
     ))
 }
 
@@ -574,7 +578,7 @@ pub fn verify(repo: &Repository, branch: Option<String>, remote: &str) -> Result
     };
     let tip = tip(repo, remote, &branch)?;
     let v = pr::verify(repo, &trust, &branch, tip)?;
-    let at = format!("{branch} at {}", short(tip));
+    let at: String = format!("{branch} at {}", short_oid(tip));
     if v.unrecorded.is_empty() {
         println!(
             "{at}: all {} commit(s) since it was protected were merged through pull requests",
@@ -591,7 +595,7 @@ pub fn verify(repo: &Repository, branch: Option<String>, remote: &str) -> Result
         let c = repo.find_commit(*id)?;
         eprintln!(
             "  {} {} ({})",
-            short(*id),
+            short_oid(*id),
             c.summary().ok().flatten().unwrap_or_default(),
             c.author().name().unwrap_or_default()
         );
@@ -624,7 +628,7 @@ fn set_status(
     status: Status,
     comment: Option<String>,
 ) -> Result<()> {
-    let (signer, _) = me(repo, trust)?;
+    let (signer, _) = current_user_with_signer(repo, trust)?;
     let id = pr::resolve(repo, id)?;
     let current = pr::load(repo, trust, id)?.model.status;
     if current == status || current == Status::Merged {
@@ -725,7 +729,7 @@ fn show(repo: &Repository, trust: &Trust, name: &str, p: &Pr) {
                 println!(
                     "\n· {actor} merged r{} as {}{approved}, {when}",
                     m.revision + 1,
-                    short(m.commit)
+                    short_oid(m.commit)
                 );
             }
         }

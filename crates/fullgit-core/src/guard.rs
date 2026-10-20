@@ -32,7 +32,7 @@ fn classify(repo: &Repository, path: &Path, blob: Oid) -> Result<Option<Leak>> {
     if local::is_local(repo, path)? {
         return Ok(Some(Leak::Local));
     }
-    let flags = git2::AttrCheckFlags::FILE_THEN_INDEX;
+    let flags: git2::AttrCheckFlags = git2::AttrCheckFlags::FILE_THEN_INDEX;
     if repo.get_attr(path, "filter", flags)? == Some(DRIVER)
         && !Sealed::is_sealed(repo.find_blob(blob)?.content())
     {
@@ -43,11 +43,12 @@ fn classify(repo: &Repository, path: &Path, blob: Oid) -> Result<Option<Leak>> {
 
 /// Leaks staged in the index, e.g. because the filter wasn't configured
 /// when a secret was added.
+/// Scans the index for secrets and per-user files that must not be committed.
 pub fn in_index(repo: &Repository) -> Result<Vec<(String, Leak)>> {
-    let index = repo.index()?;
-    let mut out = Vec::new();
+    let index: git2::Index = repo.index()?;
+    let mut out: Vec<(String, Leak)> = Vec::new();
     for e in index.iter() {
-        let path = String::from_utf8_lossy(&e.path).into_owned();
+        let path: String = String::from_utf8_lossy(&e.path).into_owned();
         if let Some(leak) = classify(repo, Path::new(&path), e.id)? {
             out.push((path, leak));
         }
@@ -65,7 +66,7 @@ pub fn in_commits(
     hide: &[Oid],
     hide_globs: &[&str],
 ) -> Result<Vec<(Oid, String, Leak)>> {
-    let mut walk = repo.revwalk()?;
+    let mut walk: git2::Revwalk = repo.revwalk()?;
     walk.push(tip)?;
     for id in hide {
         // The remote may know commits we don't.
@@ -76,15 +77,15 @@ pub fn in_commits(
     for glob in hide_globs {
         walk.hide_glob(glob)?;
     }
-    let mut out = Vec::new();
+    let mut out: Vec<(Oid, String, Leak)> = Vec::new();
     for id in walk {
-        let commit = repo.find_commit(id?)?;
-        let tree = commit.tree()?;
-        let parent = match commit.parents().next() {
+        let commit: git2::Commit = repo.find_commit(id?)?;
+        let tree: git2::Tree = commit.tree()?;
+        let parent: Option<git2::Tree> = match commit.parents().next() {
             Some(p) => Some(p.tree()?),
             None => None,
         };
-        let diff = repo.diff_tree_to_tree(parent.as_ref(), Some(&tree), None)?;
+        let diff: git2::Diff = repo.diff_tree_to_tree(parent.as_ref(), Some(&tree), None)?;
         for delta in diff.deltas() {
             let file = delta.new_file();
             let (Some(path), false) = (file.path(), file.id().is_zero()) else {

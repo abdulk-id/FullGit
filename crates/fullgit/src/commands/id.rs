@@ -1,13 +1,16 @@
-//! `fullgit id`: identities.
+//! `fullgit id`: create and manage signing identities.
 
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use fullgit_core::{Signer, SshKeygenSigner, Trust, identity, sign};
-use git2::Repository;
+use git2::{Oid, Repository};
+use ssh_key::public::KeyData;
 
-use crate::{me, resolve, role_name, short, signer};
+use crate::{
+    current_user_with_signer, resolve_identity, role_name, short_oid, signer_from_git_config,
+};
 
 /// Identities are named by `me`, an email, or an id prefix.
 #[derive(Subcommand)]
@@ -58,11 +61,12 @@ pub enum IdCmd {
     },
 }
 
+/// Runs a `fullgit id` subcommand.
 pub fn run(repo: &Repository, cmd: IdCmd) -> Result<()> {
     match cmd {
         IdCmd::Create { name, email } => {
-            let signer = signer(repo)?;
-            let trust = Trust::load_identities(repo)?;
+            let signer: SshKeygenSigner = signer_from_git_config(repo)?;
+            let trust: Trust = Trust::load_identities(repo)?;
             if let [existing, ..] = trust
                 .identities_with_key(signer.public_key().key_data())
                 .as_slice()
@@ -70,20 +74,20 @@ pub fn run(repo: &Repository, cmd: IdCmd) -> Result<()> {
                 bail!("your signing key already belongs to identity {existing}");
             }
             let config = repo.config()?;
-            let name = match name {
+            let name: String = match name {
                 Some(n) => n,
                 None => config.get_string("user.name").context("pass --name")?,
             };
-            let email = match email {
+            let email: String = match email {
                 Some(e) => e,
                 None => config.get_string("user.email").context("pass --email")?,
             };
-            let id = identity::create(repo, &signer, &name, &email)?;
+            let id: Oid = identity::create(repo, &signer, &name, &email)?;
             println!("created identity {id} for {name} <{email}>");
         }
         IdCmd::Show { who } => {
-            let trust = Trust::load(repo)?;
-            let id = resolve(repo, &trust, &who)?;
+            let trust: Trust = Trust::load(repo)?;
+            let id: Oid = resolve_identity(repo, &trust, &who)?;
             let i = &trust.identities[&id];
             println!("identity {id}");
             println!("name     {}", i.name);
@@ -97,60 +101,62 @@ pub fn run(repo: &Repository, cmd: IdCmd) -> Result<()> {
             }
         }
         IdCmd::List => {
-            let trust = Trust::load(repo)?;
+            let trust: Trust = Trust::load(repo)?;
             for (id, i) in &trust.identities {
                 println!(
                     "{}  {:<11}  {} <{}>",
-                    short(*id),
+                    short_oid(*id),
                     role_name(&trust, *id),
                     i.name,
                     i.email
                 );
             }
             for (id, why) in &trust.invalid {
-                eprintln!("warning: identity {} is invalid: {why}", short(*id));
+                eprintln!("warning: identity {} is invalid: {why}", short_oid(*id));
             }
         }
         IdCmd::Edit { name, email } => {
             if name.is_none() && email.is_none() {
                 bail!("nothing to change; pass --name or --email");
             }
-            let (signer, me) = me(repo, &Trust::load_identities(repo)?)?;
-            identity::edit(repo, me, &signer, name.as_deref(), email.as_deref())?;
+            let trust: Trust = Trust::load_identities(repo)?;
+            let (signer, my_id) = current_user_with_signer(repo, &trust)?;
+            identity::edit(repo, my_id, &signer, name.as_deref(), email.as_deref())?;
         }
         IdCmd::AddKey { key, proof } => {
-            let (signer, me) = me(repo, &Trust::load_identities(repo)?)?;
-            let (key, proof) = match (key, proof) {
+            let trust: Trust = Trust::load_identities(repo)?;
+            let (signer, my_id) = current_user_with_signer(repo, &trust)?;
+            let (key, proof): (KeyData, String) = match (key, proof) {
                 (Some(path), None) => {
-                    let new = SshKeygenSigner::new(&path)?;
-                    let proof = identity::prove(&new, me)?;
+                    let new: SshKeygenSigner = SshKeygenSigner::new(&path)?;
+                    let proof: String = identity::prove(&new, my_id)?;
                     (new.public_key().key_data().clone(), proof)
                 }
                 (None, Some(path)) => parse_proof(&read_input(&path)?)?,
                 _ => bail!("pass a key path or --proof"),
             };
-            identity::add_key(repo, me, &signer, &key, &proof)?;
+            identity::add_key(repo, my_id, &signer, &key, &proof)?;
             println!("added {}", sign::fingerprint(&key));
         }
         IdCmd::Prove { identity: who } => {
-            let trust = Trust::load_identities(repo)?;
-            let id = resolve(repo, &trust, &who)?;
-            let signer = signer(repo)?;
-            let proof = identity::prove(&signer, id)?;
+            let trust: Trust = Trust::load_identities(repo)?;
+            let id: Oid = resolve_identity(repo, &trust, &who)?;
+            let signer: SshKeygenSigner = signer_from_git_config(repo)?;
+            let proof: String = identity::prove(&signer, id)?;
             print!(
                 "{}\n{proof}",
                 sign::key_to_string(signer.public_key().key_data())
             );
         }
         IdCmd::RemoveKey { key } => {
-            let trust = Trust::load_identities(repo)?;
-            let (signer, me) = me(repo, &trust)?;
-            let current = &trust.identities[&me].keys;
-            let key = match current.iter().find(|k| sign::fingerprint(k) == key) {
+            let trust: Trust = Trust::load_identities(repo)?;
+            let (signer, my_id) = current_user_with_signer(repo, &trust)?;
+            let current = &trust.identities[&my_id].keys;
+            let key: KeyData = match current.iter().find(|k| sign::fingerprint(k) == key) {
                 Some(k) => k.clone(),
                 None => read_key(&key)?,
             };
-            identity::remove_key(repo, me, &signer, &key)?;
+            identity::remove_key(repo, my_id, &signer, &key)?;
             println!("removed {}", sign::fingerprint(&key));
         }
     }
@@ -164,15 +170,15 @@ fn read_input(path: &PathBuf) -> Result<String> {
     std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))
 }
 
-fn read_key(path: &str) -> Result<ssh_key::public::KeyData> {
-    let text = std::fs::read_to_string(path)
+fn read_key(path: &str) -> Result<KeyData> {
+    let text: String = std::fs::read_to_string(path)
         .with_context(|| format!("{path} is neither a key file nor a current key's fingerprint"))?;
     Ok(sign::key_from_string(&text)?)
 }
 
 /// Splits `fullgit id prove` output into the key and the signature.
-fn parse_proof(text: &str) -> Result<(ssh_key::public::KeyData, String)> {
-    let (key, proof) = text
+fn parse_proof(text: &str) -> Result<(KeyData, String)> {
+    let (key, proof): (&str, &str) = text
         .trim_start()
         .split_once('\n')
         .context("a proof starts with the key on its own line")?;

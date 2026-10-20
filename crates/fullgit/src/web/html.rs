@@ -1,5 +1,5 @@
-//! Building pages: escaping, markdown, and the shared layout. Everything
-//! users wrote goes through [`esc`] or [`markdown`].
+//! Building pages: escaping, markdown, and the shared layout.
+//! Everything users wrote goes through [`escape_for_html`] or [`markdown`].
 
 use std::fmt::Write;
 
@@ -7,8 +7,8 @@ use git2::Oid;
 use pulldown_cmark::{CowStr, Event, Options, Parser, Tag};
 
 /// Escapes text for HTML element content and quoted attribute values.
-pub fn esc(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+pub fn escape_for_html(s: &str) -> String {
+    let mut out: String = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
             '&' => out.push_str("&amp;"),
@@ -22,10 +22,9 @@ pub fn esc(s: &str) -> String {
     out
 }
 
-/// Renders markdown. Raw HTML is shown as text, and links only keep
-/// http(s), mailto and relative targets.
+/// Renders markdown. Raw HTML is shown as text, and links only keep http(s), mailto and relative targets.
 pub fn markdown(text: &str) -> String {
-    let options =
+    let options: Options =
         Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
     let events = Parser::new_ext(text, options).map(|e| match e {
         Event::Html(h) | Event::InlineHtml(h) => Event::Text(h),
@@ -58,10 +57,12 @@ pub fn markdown(text: &str) -> String {
     out
 }
 
+/// Drops link targets whose scheme is not http(s), mailto, or a relative path.
 fn safe_url(url: CowStr) -> CowStr {
-    let lower = url.trim().to_ascii_lowercase();
-    let scheme = lower.split_once(':').map(|(s, _)| s);
-    let relative = scheme.is_none_or(|s| s.contains('/') || s.contains('?') || s.contains('#'));
+    let lower: String = url.trim().to_ascii_lowercase();
+    let scheme: Option<&str> = lower.split_once(':').map(|(s, _)| s);
+    let relative: bool =
+        scheme.is_none_or(|s: &str| s.contains('/') || s.contains('?') || s.contains('#'));
     if relative || matches!(scheme, Some("http" | "https" | "mailto")) {
         url
     } else {
@@ -71,7 +72,7 @@ fn safe_url(url: CowStr) -> CowStr {
 
 /// Percent-encodes a query parameter value.
 pub fn url_encode(s: &str) -> String {
-    let mut out = String::new();
+    let mut out: String = String::new();
     for b in s.bytes() {
         if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
             out.push(b as char);
@@ -82,20 +83,22 @@ pub fn url_encode(s: &str) -> String {
     out
 }
 
+/// The first eight characters of an object id, for display in headings and links.
 pub fn short(id: Oid) -> String {
     id.to_string()[..8].to_owned()
 }
 
 /// A round badge with the person's initial, coloured by their id.
 pub fn avatar(name: &str, id: Option<Oid>) -> String {
-    let hue = id.map_or(0, |id| u32::from(id.as_bytes()[0]) * 360 / 256);
+    let hue: u32 = id.map_or(0, |id| u32::from(id.as_bytes()[0]) * 360 / 256);
     let initial = name.chars().next().unwrap_or('?').to_uppercase();
     format!(
         r#"<span class="avatar" style="--hue:{hue}">{}</span>"#,
-        esc(&initial.to_string())
+        escape_for_html(&initial.to_string())
     )
 }
 
+/// A coloured pill for issue or pull request state (`open`, `closed`, `merged`).
 pub fn state_badge(state: &str) -> String {
     let label = match state {
         "open" => "Open",
@@ -108,7 +111,10 @@ pub fn state_badge(state: &str) -> String {
 
 /// A hidden field telling the POST handler where to go back to.
 pub fn back(path: &str) -> String {
-    format!(r#"<input type="hidden" name="back" value="{}">"#, esc(path))
+    format!(
+        r#"<input type="hidden" name="back" value="{}">"#,
+        escape_for_html(path)
+    )
 }
 
 pub struct Page<'a> {
@@ -127,10 +133,18 @@ impl Page<'_> {
     pub fn render(&self) -> String {
         let mut flash = String::new();
         if let Some(m) = self.msg {
-            let _ = write!(flash, r#"<div class="flash ok">{}</div>"#, esc(m));
+            let _ = write!(
+                flash,
+                r#"<div class="flash ok">{}</div>"#,
+                escape_for_html(m)
+            );
         }
         if let Some(e) = self.err {
-            let _ = write!(flash, r#"<div class="flash err">{}</div>"#, esc(e));
+            let _ = write!(
+                flash,
+                r#"<div class="flash err">{}</div>"#,
+                escape_for_html(e)
+            );
         }
         format!(
             r#"<!doctype html>
@@ -138,14 +152,14 @@ impl Page<'_> {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title} · {repo}</title><style>{CSS}</style></head>
 <body><header><div class="bar">
-<a class="brand" href="/">fullgit</a><span class="repo">{repo}</span>
+<a class="brand" href="/">FullGit</a><span class="repo">{repo}</span>
 <nav><a href="/issues">Issues</a><a href="/prs">Pull requests</a><a href="/people">People</a><a href="/settings">Settings</a></nav>
 <span class="spacer"></span><span class="me">{me}</span>
 <form method="post" action="/sync">{back}<button class="btn">Sync</button></form>
 </div></header>
 <main>{flash}{body}</main></body></html>"#,
-            title = esc(self.title),
-            repo = esc(self.repo),
+            title = escape_for_html(self.title),
+            repo = escape_for_html(self.repo),
             me = self.me,
             back = back(self.path),
             body = self.body,

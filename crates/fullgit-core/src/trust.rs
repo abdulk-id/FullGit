@@ -61,29 +61,34 @@ impl std::str::FromStr for Role {
 /// valid only if it is an ancestor of the kept head of its entity, i.e. the
 /// revoker had seen it. Operations written later, or backdated onto old
 /// parents, are not kept.
-pub type Keep = BTreeMap<Oid, Oid>;
+pub type RetentionMap = BTreeMap<Oid, Oid>;
 
-pub fn kept(repo: &Repository, keep: &Keep, entity: Oid, op: Oid) -> bool {
-    keep.get(&entity)
+/// Whether `op` in `entity` is still valid under a revocation's retention map.
+pub fn kept(repo: &Repository, retention: &RetentionMap, entity: Oid, op: Oid) -> bool {
+    retention
+        .get(&entity)
         .is_some_and(|&head| head == op || repo.graph_descendant_of(head, op).unwrap_or(false))
 }
 
-pub fn keep_to_json(keep: &Keep) -> serde_json::Value {
-    keep.iter()
+/// Serializes a retention map for a JSON `keep` field.
+pub fn retention_to_json(retention: &RetentionMap) -> serde_json::Value {
+    retention
+        .iter()
         .map(|(e, h)| (e.to_string(), h.to_string().into()))
         .collect::<serde_json::Map<_, _>>()
         .into()
 }
 
 /// Parses a payload's `keep` field; absent means nothing is kept.
-pub fn keep_from_json(payload: &serde_json::Value) -> Result<Keep, String> {
+pub fn retention_from_json(payload: &serde_json::Value) -> Result<RetentionMap, String> {
     let Some(v) = payload.get("keep") else {
-        return Ok(Keep::new());
+        return Ok(RetentionMap::new());
     };
-    let map = v.as_object().ok_or("keep is not an object")?;
+    let map: &serde_json::Map<String, serde_json::Value> =
+        v.as_object().ok_or("keep is not an object")?;
     map.iter()
         .map(|(e, h)| {
-            let h = h.as_str().ok_or("keep values must be strings")?;
+            let h: &str = h.as_str().ok_or("keep values must be strings")?;
             Ok((crate::payload::parse_oid(e)?, crate::payload::parse_oid(h)?))
         })
         .collect()
@@ -91,25 +96,27 @@ pub fn keep_from_json(payload: &serde_json::Value) -> Result<Keep, String> {
 
 /// The current heads of every local entity holding an operation signed by
 /// one of `keys`: what a revocation of those keys should keep.
-pub fn keep_for(repo: &Repository, keys: &[KeyData]) -> Result<Keep> {
-    let mut keep = Keep::new();
+pub fn retention_for(repo: &Repository, keys: &[KeyData]) -> Result<RetentionMap> {
+    let mut retention: RetentionMap = RetentionMap::new();
     for r in repo.references_glob(&format!("{}*", refs::PREFIX))? {
-        let r = r?;
-        if r.name().is_ok_and(|n| n.starts_with(refs::CODE_PREFIX)) {
+        let r: git2::Reference = r?;
+        if r.name().is_ok_and(|n: &str| n.starts_with(refs::CODE_PREFIX)) {
             continue;
         }
-        let Some(head) = r.target() else { continue };
+        let Some(head): Option<Oid> = r.target() else {
+            continue;
+        };
         let Ok(ops) = entity::load(repo, &[head]) else {
             continue;
         };
-        let signed = ops
+        let signed: bool = ops
             .iter()
             .any(|o| o.op.kind != entity::MERGE_KIND && keys.contains(&o.signer));
         if signed && let Some(root) = ops.iter().find(|o| o.parents.is_empty()) {
-            keep.insert(root.id, head);
+            retention.insert(root.id, head);
         }
     }
-    Ok(keep)
+    Ok(retention)
 }
 
 /// The signer of an operation and the role they held for it.
@@ -149,9 +156,9 @@ pub struct Trust {
 impl Trust {
     /// Loads every local identity, then the trusted policy if there is one.
     pub fn load(repo: &Repository) -> Result<Self> {
-        let mut trust = Self::load_identities(repo)?;
+        let mut trust: Trust = Self::load_identities(repo)?;
         if let Some(root) = policy::root(repo)? {
-            let policy = model::load::<Policy>(repo, &trust, root).map_err(|e| match e {
+            let policy: model::Loaded<Policy> = model::load::<Policy>(repo, &trust, root).map_err(|e| match e {
                 Error::NotFound(_) => Error::Policy(format!(
                     "policy {root} is not in this clone; run `fullgit sync`"
                 )),
@@ -164,8 +171,8 @@ impl Trust {
 
     /// Loads the identities only, without the policy.
     pub fn load_identities(repo: &Repository) -> Result<Self> {
-        let mut trust = Self::default();
-        let mut identities = BTreeMap::new();
+        let mut trust: Trust = Self::default();
+        let mut identities: BTreeMap<Oid, Identity> = BTreeMap::new();
         for id in model::list::<Identity>(repo)? {
             match model::load::<Identity>(repo, &trust, id) {
                 Ok(loaded) => {
@@ -217,7 +224,7 @@ pub fn actor(
     entity: Oid,
     op: &crate::StoredOp,
 ) -> Actor {
-    let mut best = Actor {
+    let mut best: Actor = Actor {
         identity: None,
         role: None,
     };
@@ -225,7 +232,7 @@ pub fn actor(
         if !identity.signs(repo, &op.signer, entity, op.id) {
             continue;
         }
-        let role = policy.and_then(|p| p.role_for(repo, *id, entity, op.id));
+        let role: Option<Role> = policy.and_then(|p| p.role_for(repo, *id, entity, op.id));
         if best.identity.is_none() || role > best.role {
             best = Actor {
                 identity: Some(*id),

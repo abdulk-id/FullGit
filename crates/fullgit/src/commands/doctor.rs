@@ -5,7 +5,7 @@ use fullgit_core::secret::{self, DecryptionKey, Sealed};
 use fullgit_core::{Signer, Trust, local, policy, refs, remote, setup, sign};
 use git2::Repository;
 
-use crate::{me, role_name};
+use crate::{current_user_with_signer, role_name, signer_from_git_config};
 
 #[derive(Default)]
 struct Report {
@@ -25,6 +25,7 @@ impl Report {
     }
 }
 
+/// Runs `fullgit doctor` health checks.
 pub fn run(repo: &Repository) -> Result<()> {
     let mut r = Report::default();
 
@@ -43,7 +44,7 @@ pub fn run(repo: &Repository) -> Result<()> {
         }
     }
 
-    match crate::signer(repo) {
+    match signer_from_git_config(repo) {
         Ok(s) => r.ok(format!(
             "signing key {}",
             sign::fingerprint(s.public_key().key_data())
@@ -59,7 +60,7 @@ pub fn run(repo: &Repository) -> Result<()> {
         }
     };
     if let Some(trust) = &trust {
-        match me(repo, trust) {
+        match current_user_with_signer(repo, trust) {
             Ok((_, id)) => r.ok(format!(
                 "identity {} ({})",
                 &id.to_string()[..12],
@@ -152,10 +153,10 @@ pub fn run(repo: &Repository) -> Result<()> {
         }
     }
     if let Some(trust) = &trust
-        && let Ok((_, me)) = me(repo, trust)
+        && let Ok((_, my_id)) = current_user_with_signer(repo, trust)
     {
-        let history = local::history(repo, trust, me)?;
-        let state = local::state(repo, me)?;
+        let history = local::history(repo, trust, my_id)?;
+        let state = local::state(repo, my_id)?;
         let files = local::collect(repo, &declared.files)?;
         if history.head.is_some() && history.head != state.base {
             r.warn("per-user files were saved from another device; run `fullgit local restore`");

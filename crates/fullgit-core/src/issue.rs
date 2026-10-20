@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 use git2::{Oid, Repository};
 use serde_json::{Value, json};
 
-use crate::model::{self, Ctx, Loaded, Model};
+use crate::model::{self, Loaded, Model, ReplayContext};
 use crate::op::StoredOp;
 use crate::payload;
 use crate::sign::Signer;
@@ -124,7 +124,7 @@ impl Issue {
 impl Model for Issue {
     const NAMESPACE: &'static str = "issues";
 
-    fn apply(&mut self, op: &StoredOp, ctx: &Ctx) -> Result<(), String> {
+    fn apply(&mut self, op: &StoredOp, ctx: &ReplayContext) -> Result<(), String> {
         let actor = ctx.actor(op);
         actor.require(Role::Contributor)?;
         let who = actor
@@ -141,8 +141,8 @@ impl Model for Issue {
         let p = &op.op.payload;
         let what = match (op.parents.is_empty(), op.op.kind.as_str()) {
             (true, "issue.create") => {
-                let title = title(payload::str(p, "title")?)?;
-                let body = payload::opt_str(p, "body")?.unwrap_or_default();
+                let title = title(payload::required_string(p, "title")?)?;
+                let body = payload::optional_string(p, "body")?.unwrap_or_default();
                 let labels = labels(p, "labels")?;
                 self.title = title;
                 self.body = body.to_owned();
@@ -153,8 +153,8 @@ impl Model for Issue {
             (true, kind) => return Err(format!("{kind} cannot open an issue")),
             (false, "issue.edit") => {
                 moderate("edit")?;
-                let title = payload::opt_str(p, "title")?.map(title).transpose()?;
-                let body = payload::opt_str(p, "body")?;
+                let title = payload::optional_string(p, "title")?.map(title).transpose()?;
+                let body = payload::optional_string(p, "body")?;
                 if title.is_none() && body.is_none() {
                     return Err("nothing to edit".into());
                 }
@@ -167,7 +167,7 @@ impl Model for Issue {
                 What::Edited
             }
             (false, "issue.comment") => {
-                let body = text(payload::str(p, "body")?)?;
+                let body = text(payload::required_string(p, "body")?)?;
                 self.comments.push(Comment {
                     id: op.id,
                     author: who,
@@ -178,8 +178,8 @@ impl Model for Issue {
                 What::Commented(self.comments.len() - 1)
             }
             (false, "issue.comment_edit") => {
-                let id = payload::oid(p, "comment")?;
-                let body = text(payload::str(p, "body")?)?;
+                let id = payload::required_oid(p, "comment")?;
+                let body = text(payload::required_string(p, "body")?)?;
                 let comment = self
                     .comments
                     .iter_mut()
@@ -211,7 +211,7 @@ impl Model for Issue {
                 What::Assigned { add, remove }
             }
             (false, "issue.status") => {
-                let status: Status = payload::str(p, "status")?.parse()?;
+                let status: Status = payload::required_string(p, "status")?.parse()?;
                 moderate(if status == Status::Closed {
                     "close"
                 } else {

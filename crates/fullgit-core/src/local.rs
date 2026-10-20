@@ -62,8 +62,9 @@ impl File {
 /// Repository-relative path → file.
 pub type Files = BTreeMap<String, File>;
 
+/// Serializes per-user files into the snapshot wire format.
 pub fn pack(files: &Files) -> Vec<u8> {
-    let mut out = format!("{MAGIC}\n").into_bytes();
+    let mut out: Vec<u8> = format!("{MAGIC}\n").into_bytes();
     for (path, f) in files {
         out.extend(format!("{} {} {path}\n", f.mode(), f.content.len()).into_bytes());
         out.extend_from_slice(&f.content);
@@ -72,6 +73,7 @@ pub fn pack(files: &Files) -> Vec<u8> {
     out
 }
 
+/// Parses a snapshot produced by [`pack`].
 pub fn unpack(mut bytes: &[u8]) -> Result<Files, String> {
     fn line<'a>(bytes: &mut &'a [u8]) -> Result<&'a [u8], String> {
         let end = bytes
@@ -85,10 +87,11 @@ pub fn unpack(mut bytes: &[u8]) -> Result<Files, String> {
     if line(&mut bytes)? != MAGIC.as_bytes() {
         return Err("not a fullgit-local snapshot".into());
     }
-    let mut files = Files::new();
+    let mut files: Files = Files::new();
     while !bytes.is_empty() {
-        let header = std::str::from_utf8(line(&mut bytes)?).map_err(|_| "header is not UTF-8")?;
-        let mut parts = header.splitn(3, ' ');
+        let header: &str =
+            std::str::from_utf8(line(&mut bytes)?).map_err(|_| "header is not UTF-8")?;
+        let mut parts: std::str::SplitN<'_, char> = header.splitn(3, ' ');
         let (Some(mode), Some(len), Some(path)) = (parts.next(), parts.next(), parts.next()) else {
             return Err(format!("bad header {header:?}"));
         };
@@ -196,7 +199,7 @@ pub fn history(repo: &Repository, trust: &Trust, identity: Oid) -> Result<Histor
                     .seconds(),
                 signer: op.signer.clone(),
                 recipients,
-                armored: payload::str(p, "sealed")?.to_owned(),
+                armored: payload::required_string(p, "sealed")?.to_owned(),
             })
         })();
         match parsed {

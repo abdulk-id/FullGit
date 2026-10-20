@@ -23,12 +23,12 @@ pub mod trust;
 pub use entity::{Merged, append, load, merge};
 pub use identity::Identity;
 pub use issue::Issue;
-pub use model::{Ctx, Model};
+pub use model::{Model, ReplayContext};
 pub use op::{Op, StoredOp, read_op, write_op};
 pub use policy::Policy;
 pub use pr::Pr;
 pub use sign::{KeySigner, Signer, SshKeygenSigner, verify};
-pub use trust::{Actor, Role, Trust};
+pub use trust::{Actor, RetentionMap, Role, Trust};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

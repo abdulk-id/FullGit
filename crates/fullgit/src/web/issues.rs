@@ -8,19 +8,19 @@ use fullgit_core::Role;
 use fullgit_core::issue::{self, Issue, Status, What};
 use git2::Oid;
 
-use super::html::{back, esc, markdown, short, state_badge};
-use super::{Ctx, Req, Resp, with_param};
+use super::html::{back, escape_for_html, markdown, short, state_badge};
+use super::{HandlerResult, PageContext, ParsedRequest, with_param};
 use crate::date;
 
-pub fn summary(ctx: &Ctx) -> Result<String> {
-    let mut open = loaded(ctx)?;
+pub fn summary(ctx: &PageContext) -> Result<String> {
+    let mut open = load_all(ctx)?;
     open.retain(|(_, i)| i.status == Status::Open);
     let mut s = format!(
         r#"<div class="list" style="margin-bottom:20px"><div class="head"><b>Open issues</b><span class="spacer"></span><a href="/issues">All {}</a></div>"#,
         open.len()
     );
     for (id, i) in open.iter().take(8) {
-        s.push_str(&row(ctx, *id, i));
+        s.push_str(&list_row(ctx, *id, i));
     }
     if open.is_empty() {
         s.push_str(r#"<div class="empty">No open issues.</div>"#);
@@ -30,7 +30,8 @@ pub fn summary(ctx: &Ctx) -> Result<String> {
 }
 
 /// Every issue that loads, most recently updated first.
-fn loaded(ctx: &Ctx) -> Result<Vec<(Oid, Issue)>> {
+/// Every issue in the repository, with its object id.
+fn load_all(ctx: &PageContext) -> Result<Vec<(Oid, Issue)>> {
     let mut all: Vec<_> = issue::all(ctx.repo, &ctx.trust)?
         .into_iter()
         .filter_map(|(id, l)| Some((id, l.ok()?.model)))
@@ -39,7 +40,8 @@ fn loaded(ctx: &Ctx) -> Result<Vec<(Oid, Issue)>> {
     Ok(all)
 }
 
-fn row(ctx: &Ctx, id: Oid, i: &Issue) -> String {
+/// One row on the issue list page.
+fn list_row(ctx: &PageContext, id: Oid, i: &Issue) -> String {
     let labels: String = i.labels.iter().map(|l| label(l)).collect();
     let comments = match i.comments.len() {
         0 => String::new(),
@@ -49,8 +51,8 @@ fn row(ctx: &Ctx, id: Oid, i: &Issue) -> String {
         r#"<div class="row"><span class="dot {st}"></span><div><a class="t" href="/issues/{s}">{t}</a>{labels}<div class="sub">#{s} opened by {who} on {when}{comments}</div></div></div>"#,
         st = i.status.as_str(),
         s = ctx.issues.of(id),
-        t = esc(&i.title),
-        who = esc(&ctx.who(i.author)),
+        t = escape_for_html(&i.title),
+        who = escape_for_html(&ctx.who(i.author)),
         when = date(i.created()),
     )
 }
@@ -59,14 +61,14 @@ pub fn label(l: &str) -> String {
     format!(
         r#"<a class="label" href="/issues?state=all&label={}">{}</a>"#,
         super::html::url_encode(l),
-        esc(l)
+        escape_for_html(l)
     )
 }
 
-pub fn list(ctx: &Ctx, req: &Req) -> Result<Resp> {
-    let state = req.q("state").unwrap_or("open");
-    let label_filter = req.q("label");
-    let all = loaded(ctx)?;
+pub fn list(ctx: &PageContext, req: &ParsedRequest) -> Result<HandlerResult> {
+    let state = req.query_param("state").unwrap_or("open");
+    let label_filter = req.query_param("label");
+    let all = load_all(ctx)?;
     let count = |s: Status| all.iter().filter(|(_, i)| i.status == s).count();
     let tab = |key: &str, text: String| {
         let on = if key == state { " class=\"on\"" } else { "" };
@@ -85,14 +87,14 @@ pub fn list(ctx: &Ctx, req: &Req) -> Result<Resp> {
         tab("all", "All".into()),
     );
     if let Some(l) = label_filter {
-        let _ = write!(body, r#"<span>label: {}</span>"#, esc(l));
+        let _ = write!(body, r#"<span>label: {}</span>"#, escape_for_html(l));
     }
     body.push_str("</div>");
     let mut shown = 0;
     for (id, i) in &all {
         let state_ok = state == "all" || i.status.as_str() == state;
         if state_ok && label_filter.is_none_or(|l| i.labels.contains(l)) {
-            body.push_str(&row(ctx, *id, i));
+            body.push_str(&list_row(ctx, *id, i));
             shown += 1;
         }
     }
@@ -103,7 +105,7 @@ pub fn list(ctx: &Ctx, req: &Req) -> Result<Resp> {
     Ok(ctx.page(req, "Issues", body))
 }
 
-pub fn new_form(ctx: &Ctx, req: &Req) -> Result<Resp> {
+pub fn new_form(ctx: &PageContext, req: &ParsedRequest) -> Result<HandlerResult> {
     // A locked key still gets the form; the page asks for the passphrase.
     if !ctx.locked() {
         ctx.signer()?;
@@ -120,17 +122,17 @@ pub fn new_form(ctx: &Ctx, req: &Req) -> Result<Resp> {
     Ok(ctx.page(req, "New issue", body))
 }
 
-pub fn create(ctx: &Ctx, req: &Req) -> Result<Resp> {
+pub fn create(ctx: &PageContext, req: &ParsedRequest) -> Result<HandlerResult> {
     let labels = chosen_labels(ctx, req)?;
     let id = issue::create(
         ctx.repo,
         &ctx.trust,
         ctx.signer()?,
-        req.need("title")?,
-        req.field("body").unwrap_or_default().trim(),
+        req.require_form_field("title")?,
+        req.form_field("body").unwrap_or_default().trim(),
         &labels,
     )?;
-    Ok(Resp::Redirect(with_param(
+    Ok(HandlerResult::Redirect(with_param(
         &format!("/issues/{}", ctx.issues.of(id)),
         "msg",
         "Opened. Sync shares it.",
@@ -139,12 +141,12 @@ pub fn create(ctx: &Ctx, req: &Req) -> Result<Resp> {
 
 /// Checkboxes for the labels the policy lists, `current` ticked. Without a
 /// policy any label goes, so it's a text field.
-fn label_picker(ctx: &Ctx, current: &BTreeSet<String>) -> String {
+fn label_picker(ctx: &PageContext, current: &BTreeSet<String>) -> String {
     let Some(listed) = issue::available(&ctx.trust) else {
         let current: Vec<&str> = current.iter().map(String::as_str).collect();
         return format!(
             r#"<input type="text" name="labels" value="{}" placeholder="Labels, separated by spaces or commas">"#,
-            esc(&current.join(" "))
+            escape_for_html(&current.join(" "))
         );
     };
     if listed.is_empty() {
@@ -156,7 +158,7 @@ fn label_picker(ctx: &Ctx, current: &BTreeSet<String>) -> String {
         let _ = write!(
             s,
             r#"<label><input type="checkbox" name="label" value="{0}"{checked}> <span class="label">{0}</span></label>"#,
-            esc(l)
+            escape_for_html(l)
         );
     }
     s.push_str("</div>");
@@ -164,12 +166,12 @@ fn label_picker(ctx: &Ctx, current: &BTreeSet<String>) -> String {
 }
 
 /// The labels a form picked, from [`label_picker`].
-fn chosen_labels(ctx: &Ctx, req: &Req) -> Result<Vec<String>> {
+fn chosen_labels(ctx: &PageContext, req: &ParsedRequest) -> Result<Vec<String>> {
     if issue::available(&ctx.trust).is_some() {
-        return Ok(req.fields("label").into_iter().map(str::to_owned).collect());
+        return Ok(req.form_fields("label").into_iter().map(str::to_owned).collect());
     }
     let labels: Vec<String> = req
-        .field("labels")
+        .form_field("labels")
         .unwrap_or_default()
         .split(|c: char| c == ',' || c.is_whitespace())
         .filter(|l| !l.is_empty())
@@ -181,7 +183,7 @@ fn chosen_labels(ctx: &Ctx, req: &Req) -> Result<Vec<String>> {
     Ok(labels)
 }
 
-pub fn show(ctx: &Ctx, req: &Req, id: Oid) -> Result<Resp> {
+pub fn show(ctx: &PageContext, req: &ParsedRequest, id: Oid) -> Result<HandlerResult> {
     let loaded = issue::load(ctx.repo, &ctx.trust, id)?;
     let i = &loaded.model;
     let here = format!("/issues/{}", ctx.issues.of(id));
@@ -190,7 +192,7 @@ pub fn show(ctx: &Ctx, req: &Req, id: Oid) -> Result<Resp> {
     let _ = write!(
         b,
         r#"<h1>{} <span class="id">#{}</span></h1><div class="meta">{} {} opened this on {} · {} comment(s)</div>"#,
-        esc(&i.title),
+        escape_for_html(&i.title),
         ctx.issues.of(id),
         state_badge(i.status.as_str()),
         ctx.person(i.author),
@@ -220,7 +222,7 @@ pub fn show(ctx: &Ctx, req: &Req, id: Oid) -> Result<Resp> {
                         r#"<details><summary>Edit</summary><form class="stack" method="post" action="{here}/edit-comment">{}<input type="hidden" name="comment" value="{}"><textarea name="body">{}</textarea><div class="actions"><button class="btn">Save</button></div></form></details>"#,
                         back(&here),
                         c.id,
-                        esc(&c.body)
+                        escape_for_html(&c.body)
                     )
                 });
                 let verb = if c.edited {
@@ -257,7 +259,7 @@ pub fn show(ctx: &Ctx, req: &Req, id: Oid) -> Result<Resp> {
             What::Assigned { add, remove } => {
                 let names = |ids: &[Oid]| {
                     ids.iter()
-                        .map(|a| format!("<b>{}</b>", esc(&ctx.who(Some(*a)))))
+                        .map(|a| format!("<b>{}</b>", escape_for_html(&ctx.who(Some(*a)))))
                         .collect::<Vec<_>>()
                         .join(", ")
                 };
@@ -324,7 +326,7 @@ pub fn show(ctx: &Ctx, req: &Req, id: Oid) -> Result<Resp> {
     Ok(ctx.page(req, &i.title, b))
 }
 
-fn sidebar(ctx: &Ctx, b: &mut String, i: &Issue, here: &str, moderates: bool) {
+fn sidebar(ctx: &PageContext, b: &mut String, i: &Issue, here: &str, moderates: bool) {
     b.push_str("<section><h3>Labels</h3>");
     if i.labels.is_empty() {
         b.push_str("None yet");
@@ -365,7 +367,7 @@ fn sidebar(ctx: &Ctx, b: &mut String, i: &Issue, here: &str, moderates: bool) {
             let _ = write!(
                 b,
                 r#"<label style="display:block"><input type="checkbox" name="assignee" value="{id}"{checked}> {}</label>"#,
-                esc(&person.name)
+                escape_for_html(&person.name)
             );
         }
         b.push_str(r#"<button class="btn">Save assignees</button></form></details>"#);
@@ -376,15 +378,15 @@ fn sidebar(ctx: &Ctx, b: &mut String, i: &Issue, here: &str, moderates: bool) {
             b,
             r#"<section><details><summary>Edit title and description</summary><form class="stack" method="post" action="{here}/edit">{}<input type="text" name="title" value="{}"><textarea name="body" rows="8">{}</textarea><button class="btn">Save</button></form></details></section>"#,
             back(here),
-            esc(&i.title),
-            esc(&i.body)
+            escape_for_html(&i.title),
+            escape_for_html(&i.body)
         );
     }
 }
 
 /// A bordered comment: header, rendered markdown, and maybe an edit form.
 pub fn comment_box(
-    ctx: &Ctx,
+    ctx: &PageContext,
     anchor: &str,
     author: Option<Oid>,
     time: i64,
@@ -418,15 +420,21 @@ pub fn event(b: &mut String, icon: &str, actor: &str, what: &str, when: &str) {
     );
 }
 
-pub fn act(ctx: &Ctx, req: &Req, id: Oid, action: &str) -> Result<Resp> {
+/// Handles POST actions on an issue (`comment`, `close`, `reopen`, and so on).
+pub fn handle_action(
+    ctx: &PageContext,
+    req: &ParsedRequest,
+    id: Oid,
+    action: &str,
+) -> Result<HandlerResult> {
     let signer = ctx.signer()?;
     let (repo, trust) = (ctx.repo, &ctx.trust);
     let current = issue::load(repo, trust, id)?.model;
     let here = format!("/issues/{}", ctx.issues.of(id));
     let msg = match action {
         "comment" => {
-            let body = req.field("body").unwrap_or_default().trim();
-            let then = req.field("then");
+            let body = req.form_field("body").unwrap_or_default().trim();
+            let then = req.form_field("then");
             if body.is_empty() && then.is_none() {
                 bail!("write a comment first");
             }
@@ -446,9 +454,9 @@ pub fn act(ctx: &Ctx, req: &Req, id: Oid, action: &str) -> Result<Resp> {
             }
         }
         "edit" => {
-            let title = req.need("title")?;
+            let title = req.require_form_field("title")?;
             // A field left out means unchanged.
-            let body = req.field("body").map(str::trim);
+            let body = req.form_field("body").map(str::trim);
             let title = (title != current.title).then_some(title);
             let body = body.filter(|b| *b != current.body);
             if title.is_none() && body.is_none() {
@@ -469,7 +477,7 @@ pub fn act(ctx: &Ctx, req: &Req, id: Oid, action: &str) -> Result<Resp> {
         }
         "assign" => {
             let want = req
-                .fields("assignee")
+                .form_fields("assignee")
                 .into_iter()
                 .map(Oid::from_str)
                 .collect::<Result<BTreeSet<_>, _>>()?;
@@ -482,11 +490,11 @@ pub fn act(ctx: &Ctx, req: &Req, id: Oid, action: &str) -> Result<Resp> {
             "Assignees saved."
         }
         "edit-comment" => {
-            let comment = Oid::from_str(req.need("comment")?)?;
-            issue::edit_comment(repo, trust, signer, id, comment, req.need("body")?)?;
+            let comment = Oid::from_str(req.require_form_field("comment")?)?;
+            issue::edit_comment(repo, trust, signer, id, comment, req.require_form_field("body")?)?;
             "Comment saved."
         }
         other => bail!("unknown action {other}"),
     };
-    Ok(Resp::Redirect(with_param(&here, "msg", msg)))
+    Ok(HandlerResult::Redirect(with_param(&here, "msg", msg)))
 }

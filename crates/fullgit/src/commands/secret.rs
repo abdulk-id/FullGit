@@ -1,4 +1,4 @@
-//! `fullgit secret`, plus the filter and diff entry points git calls.
+//! `fullgit secret`: encrypted files, plus git filter and textconv drivers.
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
@@ -7,10 +7,10 @@ use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use fullgit_core::filter::{self, SecretFilter};
 use fullgit_core::secret::{self, DecryptionKey, Rekeyed, Sealed};
-use fullgit_core::{Signer, Trust, sign};
+use fullgit_core::{Signer, SshKeygenSigner, Trust, sign};
 use git2::Repository;
 
-use crate::signer;
+use crate::signer_from_git_config;
 
 #[derive(Subcommand)]
 pub enum SecretCmd {
@@ -33,6 +33,7 @@ pub enum SecretCmd {
     Checkout,
 }
 
+/// Runs a `fullgit secret` subcommand.
 pub fn run(repo: &Repository, cmd: SecretCmd) -> Result<()> {
     match cmd {
         SecretCmd::Add { paths, group } => {
@@ -53,7 +54,7 @@ pub fn run(repo: &Repository, cmd: SecretCmd) -> Result<()> {
         }
         SecretCmd::List => {
             let trust = Trust::load(repo)?;
-            let mine = signer(repo)
+            let mine: Option<String> = signer_from_git_config(repo)
                 .map(|s| sign::fingerprint(s.public_key().key_data()))
                 .ok();
             for e in secret::entries(repo)? {
@@ -81,7 +82,7 @@ pub fn run(repo: &Repository, cmd: SecretCmd) -> Result<()> {
         }
         SecretCmd::Rekey { paths } => {
             let trust = Trust::load(repo)?;
-            let signer = signer(repo)?;
+            let signer: SshKeygenSigner = signer_from_git_config(repo)?;
             let key = DecryptionKey::from_git_config(repo)?;
             let names = key_owners(&trust);
             let mut failed = false;

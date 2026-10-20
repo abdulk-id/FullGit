@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use fullgit_core::{Ctx, Model, Role, SshKeygenSigner, StoredOp};
+use fullgit_core::{Model, ReplayContext, Role, SshKeygenSigner, StoredOp};
 use git2::Repository;
 use tempfile::TempDir;
 
@@ -23,7 +23,7 @@ impl Model for Register {
     const NAMESPACE: &'static str = "registers";
     const NEEDS_POLICY: bool = false;
 
-    fn apply(&mut self, op: &StoredOp, ctx: &Ctx) -> Result<(), String> {
+    fn apply(&mut self, op: &StoredOp, ctx: &ReplayContext) -> Result<(), String> {
         let needs = if op.op.kind == "reg.tag" {
             Role::Maintainer
         } else {

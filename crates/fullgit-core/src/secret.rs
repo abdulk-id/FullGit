@@ -128,7 +128,7 @@ impl Sealed {
 /// The keys a secret of `group` is encrypted to: the current keys of every
 /// member, sorted by fingerprint.
 pub fn recipients(trust: &Trust, group: &str) -> Result<Vec<KeyData>> {
-    let (_, policy) = trust
+    let (_, policy): &(Oid, crate::policy::Policy) = trust
         .policy
         .as_ref()
         .ok_or_else(|| Error::Policy("secrets need a policy; run `fullgit policy init`".into()))?;

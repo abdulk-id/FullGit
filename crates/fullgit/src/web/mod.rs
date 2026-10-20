@@ -1,23 +1,19 @@
 //! `fullgit web`: a local web UI for issues, pull requests and people.
 //!
-//! It listens on 127.0.0.1 only, and answers only browsers holding the
-//! random token printed at start: `?token=` once sets a cookie, which is
-//! `SameSite=Strict`, so other sites can't make the browser act here. The
-//! `Host` header must be the address served (against DNS rebinding), and
-//! a POST's `Origin`, when sent, must be this server. Pages run no
-//! scripts except one, when the signing key is locked: the browser's own
-//! prompt asks for the passphrase, and its alert reports that the key is
-//! locked or the passphrase was wrong. The content security policy allows
-//! only that script, by a nonce that changes on every response.
+//! It listens on 127.0.0.1 only, and answers only browsers holding the random token printed at start: `?token=` once
+//! sets a cookie, which is `SameSite=Strict`, so other sites can't make the browser act here. The `Host` header must
+//! be the address served (against DNS rebinding), and a POST's `Origin`, when sent, must be this server. Pages run no
+//! scripts except one, when the signing key is locked: the browser's own prompt asks for the passphrase, and its
+//! alert reports that the key is locked or the passphrase was wrong. The content security policy allows only that
+//! script, by a nonce that changes on every response.
 //!
-//! The server never asks for a passphrase on its terminal, where nobody
-//! is looking: a key that needs one, and that ssh-agent doesn't hold, is
-//! unlocked from that prompt and kept in memory until the server stops, as
-//! ssh-agent would keep it. Sync and merge give that passphrase to ssh,
+//! The server never asks for a passphrase on its terminal, where nobody is looking: a key that
+//! needs one, and that ssh-agent doesn't hold, is unlocked from the browser prompt and kept in
+//! memory until the server stops, as ssh-agent would. Sync and merge pass that passphrase to ssh,
 //! which would otherwise read it from the terminal and hang the browser.
 //!
-//! Requests are served one at a time. GETs never change anything; each
-//! POST does one thing and redirects back, with a message.
+//! Requests are served one at a time. GETs never change anything; each POST does one thing and
+//! redirects back with a message.
 
 mod html;
 mod issues;
@@ -36,7 +32,7 @@ use fullgit_core::{KeySigner, Role, Signer, Trust, issue, pr};
 use git2::{Oid, Repository};
 use tiny_http::{Header, Method, Request, Response, Server};
 
-use html::{Page, back, esc, url_encode};
+use html::{Page, back, escape_for_html, url_encode};
 
 pub struct Options {
     pub port: u16,
@@ -45,34 +41,41 @@ pub struct Options {
 }
 
 pub fn serve(repo_path: &std::path::Path, opts: Options) -> Result<()> {
-    let server = Server::http(("127.0.0.1", opts.port))
+    let server: Server = Server::http(("127.0.0.1", opts.port))
         .map_err(|e| anyhow::anyhow!("can't listen on port {}: {e}", opts.port))?;
-    let port = server
+
+    let port: u16 = server
         .server_addr()
         .to_ip()
         .context("not a TCP address")?
         .port();
+
     let mut bytes = [0u8; 24];
     getrandom::fill(&mut bytes).map_err(|e| anyhow::anyhow!("no randomness: {e}"))?;
     let token: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-    let url = format!("http://127.0.0.1:{port}/?token={token}");
+
+    let url: String = format!("http://127.0.0.1:{port}/?token={token}");
+
     println!("serving {} at {url}", repo_path.display());
     println!("only this URL gets in; Ctrl-C stops the server");
+
     use std::io::Write;
     std::io::stdout().flush()?;
     if opts.open {
         open_browser(&url);
     }
-    let app = App {
+    let app: App = App {
         repo_path: repo_path.to_owned(),
         token,
         port,
         remote: opts.remote,
         unlocked: RefCell::new(None),
     };
+
     for request in server.incoming_requests() {
         app.handle(request);
     }
+
     Ok(())
 }
 
@@ -82,6 +85,7 @@ fn open_browser(url: &str) {
     } else {
         "xdg-open"
     };
+
     let _ = std::process::Command::new(opener)
         .arg(url)
         .stdout(std::process::Stdio::null())
@@ -98,44 +102,46 @@ struct App {
     unlocked: RefCell<Option<Unlocked>>,
 }
 
-/// A key decrypted from the page, and the passphrase ssh still needs in
-/// order to read the key file itself. `passphrase` is set only when the
-/// file is encrypted.
+/// A key decrypted from the page, and the passphrase ssh needs in order to read the key file itself.
+/// `passphrase` is set only when the file is encrypted.
 #[derive(Clone)]
 struct Unlocked {
     key: KeySigner,
     passphrase: Option<String>,
 }
 
-/// One parsed request.
-pub struct Req {
+/// HTTP method, path, query string, and (for POST) parsed form fields.
+pub struct ParsedRequest {
     pub method: Method,
     pub path: String,
     pub query: BTreeMap<String, String>,
     pub form: Vec<(String, String)>,
 }
 
-impl Req {
-    pub fn q(&self, key: &str) -> Option<&str> {
+impl ParsedRequest {
+    /// A query-string parameter from the URL.
+    pub fn query_param(&self, key: &str) -> Option<&str> {
         self.query.get(key).map(String::as_str)
     }
 
-    pub fn field(&self, key: &str) -> Option<&str> {
+    /// One value from the submitted form body.
+    pub fn form_field(&self, key: &str) -> Option<&str> {
         self.form
             .iter()
             .find(|(k, _)| k == key)
             .map(|(_, v)| v.as_str())
     }
 
-    /// A field that must be there, trimmed; empty counts as missing.
-    pub fn need(&self, key: &str) -> Result<&str> {
-        match self.field(key).map(str::trim) {
+    /// A form field that must be present and non-empty after trimming.
+    pub fn require_form_field(&self, key: &str) -> Result<&str> {
+        match self.form_field(key).map(str::trim) {
             Some(v) if !v.is_empty() => Ok(v),
             _ => bail!("{key} is empty"),
         }
     }
 
-    pub fn fields(&self, key: &str) -> Vec<&str> {
+    /// Every value submitted for a repeated form field (checkboxes, multi-select).
+    pub fn form_fields(&self, key: &str) -> Vec<&str> {
         self.form
             .iter()
             .filter(|(k, _)| k == key)
@@ -144,14 +150,15 @@ impl Req {
     }
 }
 
-pub enum Resp {
+/// What a route handler returns before it becomes an HTTP response.
+pub enum HandlerResult {
     Html(u16, String),
     /// 303 See Other.
     Redirect(String),
 }
 
-/// What every page needs.
-pub struct Ctx<'a> {
+/// Repository state and the viewer's identity, shared by every page handler.
+pub struct PageContext<'a> {
     pub repo: &'a Repository,
     pub trust: Trust,
     /// Your identity, if your key has one.
@@ -171,7 +178,7 @@ pub struct Ctx<'a> {
     pub prs: Abbrev,
 }
 
-impl Ctx<'_> {
+impl PageContext<'_> {
     pub fn me_id(&self) -> Option<Oid> {
         self.me
     }
@@ -209,10 +216,14 @@ impl Ctx<'_> {
     /// Avatar and name.
     pub fn person(&self, id: Option<Oid>) -> String {
         let name = self.who(id);
-        format!("{}<b>{}</b>", html::avatar(&name, id), esc(&name))
+        format!(
+            "{}<b>{}</b>",
+            html::avatar(&name, id),
+            escape_for_html(&name)
+        )
     }
 
-    pub fn page(&self, req: &Req, title: &str, body: String) -> Resp {
+    pub fn page(&self, req: &ParsedRequest, title: &str, body: String) -> HandlerResult {
         let path = match req
             .query
             .iter()
@@ -232,29 +243,29 @@ impl Ctx<'_> {
                     ),
                     false => String::new(),
                 };
-                format!("{} {}{lock}", self.person(Some(id)), esc(role))
+                format!("{} {}{lock}", self.person(Some(id)), escape_for_html(role))
             }
             None => "read-only: your key has no identity".into(),
         };
         // The locked-key and wrong-passphrase messages are the browser's
         // alert, not the banner. The prompt replaces the old unlock form.
-        let err = req.q("err");
+        let err = req.query_param("err");
         let alert = err.filter(|e| popup_error(e));
         let mut body = body;
         if self.locked() || alert.is_some() {
             body.insert_str(
                 0,
-                &key_popup(alert, self.locked().then_some(&self.key_name)),
+                &browser_key_popup(alert, self.locked().then_some(&self.key_name)),
             );
         }
-        Resp::Html(
+        HandlerResult::Html(
             200,
             Page {
                 title,
                 repo: &self.name,
                 me: &me,
                 path: &path,
-                msg: req.q("msg"),
+                msg: req.query_param("msg"),
                 err: err.filter(|e| alert != Some(*e)),
                 body,
             }
@@ -270,21 +281,24 @@ fn popup_error(err: &str) -> bool {
 
 /// `prompt` for the passphrase, and `alert` for `message` when there is one.
 /// The nonce is the only script the page's content security policy allows.
-fn key_popup(message: Option<&str>, key_name: Option<&str>) -> String {
+fn browser_key_popup(message: Option<&str>, key_name: Option<&str>) -> String {
     let Some(nonce) = fresh_nonce() else {
         return String::new();
     };
-    let message = match message {
+
+    let message: String = match message {
         Some(m) => js_string(m),
         None => "null".into(),
     };
-    let ask = match key_name {
+
+    let ask: String = match key_name {
         Some(name) => js_string(&format!(
             "Your key {name} needs its passphrase before you can change anything. \
-             fullgit keeps it unlocked in memory until the server stops."
+             FullGit keeps it unlocked in memory until the server stops."
         )),
         None => "null".into(),
     };
+
     format!(
         r#"<script nonce="{nonce}">(function(){{var err={message};if(err!==null)alert(err);var ask={ask};if(ask===null)return;var pass=prompt(ask);if(pass===null)return;var f=document.createElement("form");f.method="post";f.action="/unlock";function field(n,v){{var i=document.createElement("input");i.type="hidden";i.name=n;i.value=v;f.appendChild(i)}}field("passphrase",pass);var url=new URL(location.href);url.searchParams.delete("err");url.searchParams.delete("msg");field("back",url.pathname+url.search+url.hash);document.body.appendChild(f);f.submit()}})()</script>"#
     )
@@ -297,9 +311,9 @@ fn fresh_nonce() -> Option<String> {
 }
 
 /// A quoted JavaScript string. `<` is escaped so the text can't close the script.
-fn js_string(s: &str) -> String {
-    let mut out = String::from('"');
-    for c in s.chars() {
+fn js_string(str: &str) -> String {
+    let mut out: String = String::from('"');
+    for c in str.chars() {
         match c {
             '\\' => out.push_str("\\\\"),
             '"' => out.push_str("\\\""),
@@ -326,16 +340,22 @@ fn query_string(q: &BTreeMap<String, String>) -> String {
 impl App {
     fn handle(&self, mut request: Request) {
         let response = match self.check(&request) {
-            Err(why) => text(403, why),
-            Ok(Some(redirect)) => redirect,
+            Err(why) => plain_text_response(403, why),
+
+            Ok(Some(response)) => response,
+
             Ok(None) => match self.parse(&mut request) {
-                Err(e) => text(400, &format!("{e:#}")),
+                Err(e) => plain_text_response(400, &format!("{e:#}")),
+
                 Ok(req) => match self.route(&req) {
-                    Ok(Resp::Html(status, body)) => html_response(status, body),
-                    Ok(Resp::Redirect(to)) => redirect(&to),
+                    Ok(HandlerResult::Html(status, body)) => html_response(status, body),
+
+                    Ok(HandlerResult::Redirect(to)) => see_other_response(&to),
+
                     Err(e) if req.method == Method::Post => {
-                        redirect(&with_param(back_of(&req), "err", &format!("{e:#}")))
+                        see_other_response(&with_param(back_of(&req), "err", &format!("{e:#}")))
                     }
+
                     Err(e) => html_response(404, error_page(&format!("{e:#}"))),
                 },
             },
@@ -343,8 +363,8 @@ impl App {
         let _ = request.respond(response);
     }
 
-    /// Authenticates a request. `Ok(Some(_))` answers it right away: a
-    /// valid `?token=` sets the cookie and redirects without it.
+    /// Authenticates a request.
+    /// `Ok(Some(_))` answers it right away: a valid `?token=` sets the cookie and redirects without it.
     fn check(
         &self,
         request: &Request,
@@ -356,8 +376,8 @@ impl App {
                 .find(|h| h.field.equiv(name))
                 .map(|h| h.value.as_str().to_owned())
         };
-        let host = header("Host").unwrap_or_default();
-        let port = self.port;
+        let host: String = header("Host").unwrap_or_default();
+        let port: u16 = self.port;
         if host != format!("127.0.0.1:{port}") && host != format!("localhost:{port}") {
             return Err("unexpected Host header");
         }
@@ -369,7 +389,7 @@ impl App {
         }
         let (path, query) = split_url(request.url());
         if let Some(t) = query.get("token") {
-            if !same(t, &self.token) {
+            if !constant_time_equal(t, &self.token) {
                 return Err("wrong token; use the URL `fullgit web` printed");
             }
             let cookie = format!(
@@ -387,31 +407,34 @@ impl App {
                 true => path,
                 false => format!("{path}?{}", query_string(&rest)),
             };
-            return Ok(Some(redirect(&to).with_header(
+            return Ok(Some(see_other_response(&to).with_header(
                 Header::from_bytes("Set-Cookie", cookie).expect("valid header"),
             )));
         }
         let cookies = header("Cookie").unwrap_or_default();
-        let ok = cookies.split(';').any(|c| {
+
+        let ok: bool = cookies.split(';').any(|c| {
             c.trim()
                 .split_once('=')
-                .is_some_and(|(k, v)| k == self.cookie() && same(v, &self.token))
+                .is_some_and(|(k, v)| k == self.cookie() && constant_time_equal(v, &self.token))
         });
+
         if !ok {
             return Err("open the URL `fullgit web` printed; it holds the access token");
         }
+
         Ok(None)
     }
 
     /// Decrypts your key with the passphrase from the page, or forgets it.
-    fn unlock(&self, repo: &Repository, req: &Req) -> Result<Resp> {
+    fn unlock(&self, repo: &Repository, req: &ParsedRequest) -> Result<HandlerResult> {
         let msg = if req.path == "/lock" {
             *self.unlocked.borrow_mut() = None;
             "Key locked."
         } else {
             let ssh = crate::signer(repo)?;
             let encrypted = ssh.needs_passphrase();
-            let passphrase = req.field("passphrase").unwrap_or_default();
+            let passphrase = req.form_field("passphrase").unwrap_or_default();
             let key = ssh.unlock(passphrase).map_err(|e| match e {
                 fullgit_core::Error::Signature(why) => anyhow::anyhow!(why),
                 e => e.into(),
@@ -422,7 +445,7 @@ impl App {
             });
             "Key unlocked until the server stops."
         };
-        Ok(Resp::Redirect(with_param(back_of(req), "msg", msg)))
+        Ok(HandlerResult::Redirect(with_param(back_of(req), "msg", msg)))
     }
 
     /// Cookies are shared across ports, so each server names its own.
@@ -430,7 +453,7 @@ impl App {
         format!("fullgit_{}", self.port)
     }
 
-    fn parse(&self, request: &mut Request) -> Result<Req> {
+    fn parse(&self, request: &mut Request) -> Result<ParsedRequest> {
         let (path, query) = split_url(request.url());
         let mut form = Vec::new();
         if *request.method() == Method::Post {
@@ -442,7 +465,7 @@ impl App {
                 .context("reading the form")?;
             form = parse_pairs(&body);
         }
-        Ok(Req {
+        Ok(ParsedRequest {
             method: request.method().clone(),
             path,
             query,
@@ -450,7 +473,7 @@ impl App {
         })
     }
 
-    fn route(&self, req: &Req) -> Result<Resp> {
+    fn route(&self, req: &ParsedRequest) -> Result<HandlerResult> {
         let repo = Repository::open(&self.repo_path)?;
         if req.method == Method::Post && matches!(req.path.as_str(), "/unlock" | "/lock") {
             return self.unlock(&repo, req);
@@ -484,7 +507,7 @@ impl App {
             .repo_path
             .file_name()
             .map_or_else(|| "repository".into(), |n| n.to_string_lossy().into_owned());
-        let ctx = Ctx {
+        let ctx = PageContext {
             repo: &repo,
             trust,
             me,
@@ -515,14 +538,16 @@ impl App {
             (true, ["issues", "new"]) => issues::create(&ctx, req),
             (false, ["issues", id]) => issues::show(&ctx, req, issue::resolve(&repo, id)?),
             (true, ["issues", id, action]) => {
-                issues::act(&ctx, req, issue::resolve(&repo, id)?, action)
+                issues::handle_action(&ctx, req, issue::resolve(&repo, id)?, action)
             }
             (false, ["prs"]) => prs::list(&ctx, req),
             (false, ["prs", "new"]) => prs::new_form(&ctx, req),
             (true, ["prs", "new"]) => prs::create(&ctx, req),
             (false, ["prs", id]) => prs::show(&ctx, req, pr::resolve(&repo, id)?),
             (false, ["prs", id, "diff"]) => prs::diff(&ctx, req, pr::resolve(&repo, id)?),
-            (true, ["prs", id, action]) => prs::act(&ctx, req, pr::resolve(&repo, id)?, action),
+            (true, ["prs", id, action]) => {
+                prs::handle_action(&ctx, req, pr::resolve(&repo, id)?, action)
+            }
             (false, ["people"]) => people::show(&ctx, req),
             (true, ["people", "role"]) => people::set_role(&ctx, req),
             (false, ["settings"]) => settings::show(&ctx, req),
@@ -533,7 +558,7 @@ impl App {
 }
 
 /// Every page, until the repository has a policy.
-fn no_policy(ctx: &Ctx, req: &Req) -> Resp {
+fn no_policy(ctx: &PageContext, req: &ParsedRequest) -> HandlerResult {
     let body = r#"<div class="box"><div class="hd"><b>Set up fullgit</b></div><div class="bd pad">
 <p>This repository has no policy yet. Issues and pull requests need one: it says who may do what. To create it, with you as its owner, run:</p>
 <pre>fullgit policy init
@@ -547,7 +572,7 @@ fullgit sync</pre>
 }
 
 /// The overview: open pull requests and issues, each on half the page.
-fn home(ctx: &Ctx, req: &Req) -> Result<Resp> {
+fn home(ctx: &PageContext, req: &ParsedRequest) -> Result<HandlerResult> {
     let mut body = String::from(r#"<div class="grid">"#);
     body.push_str(&prs::summary(ctx)?);
     body.push_str(&issues::summary(ctx)?);
@@ -555,7 +580,7 @@ fn home(ctx: &Ctx, req: &Req) -> Result<Resp> {
     Ok(ctx.page(req, "Overview", body))
 }
 
-fn sync_now(ctx: &Ctx, req: &Req) -> Result<Resp> {
+fn sync_now(ctx: &PageContext, req: &ParsedRequest) -> Result<HandlerResult> {
     // ssh would read the passphrase from the terminal and hang the browser.
     // The page already asks for it; refuse until it has been given.
     if ctx.locked() {
@@ -574,11 +599,11 @@ fn sync_now(ctx: &Ctx, req: &Req) -> Result<Resp> {
             ", {skipped} skipped (run `fullgit sync` to see why)"
         ));
     }
-    Ok(Resp::Redirect(with_param(back_of(req), "msg", &msg)))
+    Ok(HandlerResult::Redirect(with_param(back_of(req), "msg", &msg)))
 }
 
 /// Gives ssh the passphrase the page unlocked, for the rest of this call.
-pub(crate) fn ssh_passphrase(ctx: &Ctx) -> Result<Option<sync::PassphraseGuard>> {
+pub(crate) fn ssh_passphrase(ctx: &PageContext) -> Result<Option<sync::PassphraseGuard>> {
     ctx.passphrase
         .as_deref()
         .map(sync::PassphraseGuard::activate)
@@ -587,8 +612,8 @@ pub(crate) fn ssh_passphrase(ctx: &Ctx) -> Result<Option<sync::PassphraseGuard>>
 }
 
 /// Where a POST returns to: its `back` field, if it's a local path.
-pub fn back_of(req: &Req) -> &str {
-    match req.field("back") {
+pub fn back_of(req: &ParsedRequest) -> &str {
+    match req.form_field("back") {
         Some(b) if b.starts_with('/') && !b.starts_with("//") && !b.contains('\\') => b,
         _ => "/",
     }
@@ -608,7 +633,7 @@ pub fn with_param(url: &str, key: &str, value: &str) -> String {
 
 fn split_url(url: &str) -> (String, BTreeMap<String, String>) {
     let (path, query) = url.split_once('?').unwrap_or((url, ""));
-    (decode(path), parse_pairs(query).into_iter().collect())
+    (url_form_decode(path), parse_pairs(query).into_iter().collect())
 }
 
 fn parse_pairs(s: &str) -> Vec<(String, String)> {
@@ -616,13 +641,13 @@ fn parse_pairs(s: &str) -> Vec<(String, String)> {
         .filter(|p| !p.is_empty())
         .map(|p| {
             let (k, v) = p.split_once('=').unwrap_or((p, ""));
-            (decode(k), decode(v))
+            (url_form_decode(k), url_form_decode(v))
         })
         .collect()
 }
 
 /// Decodes `application/x-www-form-urlencoded` text.
-fn decode(s: &str) -> String {
+fn url_form_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -630,8 +655,8 @@ fn decode(s: &str) -> String {
         match bytes[i] {
             b'+' => out.push(b' '),
             b'%' => match (
-                bytes.get(i + 1).and_then(hex),
-                bytes.get(i + 2).and_then(hex),
+                bytes.get(i + 1).and_then(hex_digit),
+                bytes.get(i + 2).and_then(hex_digit),
             ) {
                 (Some(hi), Some(lo)) => {
                     out.push(hi << 4 | lo);
@@ -646,12 +671,12 @@ fn decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-fn hex(b: &u8) -> Option<u8> {
+fn hex_digit(b: &u8) -> Option<u8> {
     (*b as char).to_digit(16).map(|d| d as u8)
 }
 
 /// Compares secrets in time independent of where they differ.
-fn same(a: &str, b: &str) -> bool {
+fn constant_time_equal(a: &str, b: &str) -> bool {
     a.len() == b.len()
         && a.bytes()
             .zip(b.bytes())
@@ -699,7 +724,7 @@ fn script_nonce_in(body: &str) -> Option<String> {
     }
 }
 
-fn text(status: u16, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+fn plain_text_response(status: u16, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     security_headers(
         Response::from_string(format!("{body}\n"))
             .with_status_code(status)
@@ -711,7 +736,7 @@ fn text(status: u16, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     )
 }
 
-fn redirect(to: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+fn see_other_response(to: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     let location = Header::from_bytes("Location", to)
         .unwrap_or_else(|()| Header::from_bytes("Location", "/").expect("valid header"));
     security_headers(
@@ -725,6 +750,6 @@ fn redirect(to: &str) -> Response<std::io::Cursor<Vec<u8>>> {
 fn error_page(message: &str) -> String {
     format!(
         r#"<!doctype html><meta charset="utf-8"><title>fullgit</title><p>{}</p><p><a href="/">Back to the overview</a></p>"#,
-        esc(message)
+        escape_for_html(message)
     )
 }

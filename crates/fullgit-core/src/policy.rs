@@ -18,13 +18,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use git2::{Oid, Repository};
+use ssh_key::public::KeyData;
 use serde_json::json;
 
-use crate::model::{self, Ctx, Model};
+use crate::model::{self, Model, ReplayContext};
 use crate::op::StoredOp;
 use crate::payload;
 use crate::sign::Signer;
-use crate::trust::{self, Keep, Role, Trust, keep_from_json, keep_to_json, kept};
+use crate::trust::{self, RetentionMap, Role, Trust, kept, retention_from_json, retention_to_json};
 use crate::{Error, Result};
 
 pub const ROOT_FILE: &str = ".fullgit/root";
@@ -35,7 +36,7 @@ pub struct Policy {
     roles: BTreeMap<Oid, Role>,
     /// Roles taken away (by a revoke or a lower grant), each with what its
     /// removal kept.
-    demotions: BTreeMap<Oid, Vec<(Role, Keep)>>,
+    demotions: BTreeMap<Oid, Vec<(Role, RetentionMap)>>,
     pub groups: BTreeMap<String, BTreeSet<Oid>>,
     /// Merge rules, per target branch.
     pub rules: BTreeMap<String, Rule>,
@@ -79,15 +80,20 @@ impl Policy {
         self.role(identity).max(before)
     }
 
-    fn set_role(&mut self, identity: Oid, role: Option<Role>, keep: Keep) -> Result<(), String> {
-        let old = self.role(identity);
+    fn set_role(
+        &mut self,
+        identity: Oid,
+        role: Option<Role>,
+        retention: RetentionMap,
+    ) -> Result<(), String> {
+        let old: Option<Role> = self.role(identity);
         if old == role {
             return Err(match role {
                 Some(r) => format!("{identity} is already {r}"),
                 None => format!("{identity} holds no role"),
             });
         }
-        let owners = self.roles.values().filter(|r| **r == Role::Owner).count();
+        let owners: usize = self.roles.values().filter(|r| **r == Role::Owner).count();
         if old == Some(Role::Owner) && owners == 1 {
             return Err("the policy must keep at least one owner".into());
         }
@@ -97,7 +103,7 @@ impl Policy {
             self.demotions
                 .entry(identity)
                 .or_default()
-                .push((old, keep));
+                .push((old, retention));
         }
         match role {
             Some(r) => self.roles.insert(identity, r),
@@ -111,19 +117,19 @@ impl Model for Policy {
     const NAMESPACE: &'static str = "policy";
     const NEEDS_POLICY: bool = false;
 
-    fn apply(&mut self, op: &StoredOp, ctx: &Ctx) -> Result<(), String> {
-        let p = &op.op.payload;
+    fn apply(&mut self, op: &StoredOp, ctx: &ReplayContext) -> Result<(), String> {
+        let p: &serde_json::Value = &op.op.payload;
         if op.parents.is_empty() {
             if op.op.kind != "policy.genesis" {
                 return Err(format!("{} cannot create a policy", op.op.kind));
             }
-            let owners = p["owners"]
+            let owners: BTreeSet<Oid> = p["owners"]
                 .as_array()
                 .ok_or("missing owners")?
                 .iter()
                 .map(|v| payload::parse_oid(v.as_str().ok_or("owners must be ids")?))
                 .collect::<Result<BTreeSet<_>, _>>()?;
-            let signed_by_owner = owners.iter().any(|id| {
+            let signed_by_owner: bool = owners.iter().any(|id| {
                 ctx.trust
                     .identities
                     .get(id)
@@ -139,13 +145,13 @@ impl Model for Policy {
         self.still_valid(op, ctx)?;
         match op.op.kind.as_str() {
             "policy.grant" => {
-                let identity = payload::oid(p, "identity")?;
-                let role = payload::str(p, "role")?.parse()?;
-                self.set_role(identity, Some(role), keep_from_json(p)?)
+                let identity = payload::required_oid(p, "identity")?;
+                let role = payload::required_string(p, "role")?.parse()?;
+                self.set_role(identity, Some(role), retention_from_json(p)?)
             }
             "policy.revoke" => {
-                let identity = payload::oid(p, "identity")?;
-                self.set_role(identity, None, keep_from_json(p)?)
+                let identity = payload::required_oid(p, "identity")?;
+                self.set_role(identity, None, retention_from_json(p)?)
             }
             "policy.group_add" => {
                 let (group, identity) = group_member(p)?;
@@ -160,7 +166,7 @@ impl Model for Policy {
                 Ok(())
             }
             "policy.protect" => {
-                let branch = payload::str(p, "branch")?;
+                let branch = payload::required_string(p, "branch")?;
                 if !git2::Reference::is_valid_name(&format!("refs/heads/{branch}")) {
                     return Err(format!("{branch:?} is not a branch name"));
                 }
@@ -168,8 +174,8 @@ impl Model for Policy {
                     .as_u64()
                     .and_then(|n| u32::try_from(n).ok())
                     .ok_or("approvals is not a count")?;
-                let group = payload::opt_str(p, "group")?.map(str::to_owned);
-                let since = payload::opt_str(p, "since")?
+                let group = payload::optional_string(p, "group")?.map(str::to_owned);
+                let since = payload::optional_string(p, "since")?
                     .map(payload::parse_oid)
                     .transpose()?;
                 let rule = (approvals > 0).then_some(Rule {
@@ -196,7 +202,7 @@ impl Model for Policy {
                 Ok(())
             }
             "policy.label_add" => {
-                let label = payload::str(p, "label")?;
+                let label = payload::required_string(p, "label")?;
                 crate::issue::valid_label(label)?;
                 if !self.labels.insert(label.to_owned()) {
                     return Err(format!("{label} is already a label"));
@@ -204,7 +210,7 @@ impl Model for Policy {
                 Ok(())
             }
             "policy.label_remove" => {
-                let label = payload::str(p, "label")?;
+                let label = payload::required_string(p, "label")?;
                 if !self.labels.remove(label) {
                     return Err(format!("{label} is not a label"));
                 }
@@ -217,7 +223,7 @@ impl Model for Policy {
     /// Owners act on the policy; maintainers also manage the labels.
     /// Re-checked against the final state, so operations that a revocation
     /// didn't keep are dropped.
-    fn still_valid(&self, op: &StoredOp, ctx: &Ctx) -> Result<(), String> {
+    fn still_valid(&self, op: &StoredOp, ctx: &ReplayContext) -> Result<(), String> {
         let role = match op.op.kind.as_str() {
             "policy.label_add" | "policy.label_remove" => Role::Maintainer,
             _ => Role::Owner,
@@ -227,11 +233,11 @@ impl Model for Policy {
 }
 
 fn group_member(p: &serde_json::Value) -> Result<(String, Oid), String> {
-    let group = payload::str(p, "group")?;
+    let group = payload::required_string(p, "group")?;
     if group.is_empty() {
         return Err("group name is empty".into());
     }
-    Ok((group.to_owned(), payload::oid(p, "identity")?))
+    Ok((group.to_owned(), payload::required_oid(p, "identity")?))
 }
 
 /// The policy this clone trusts: the pinned one, else the committed one.
@@ -333,9 +339,10 @@ pub fn grant(
     role: Role,
 ) -> Result<Oid> {
     let (_, policy) = loaded(trust)?;
-    let mut payload = json!({ "identity": identity.to_string(), "role": role });
+    let mut payload: serde_json::Value =
+        json!({ "identity": identity.to_string(), "role": role });
     if policy.role(identity) > Some(role) {
-        payload["keep"] = keep_to_json(&keep_of(repo, trust, identity)?);
+        payload["keep"] = retention_to_json(&retention_of(repo, trust, identity)?);
     }
     update(repo, trust, signer, "policy.grant", payload)
 }
@@ -343,13 +350,13 @@ pub fn grant(
 /// Takes away `identity`'s role. Its operations already in this clone stay
 /// valid; anything it signs later, or backdates, does not.
 pub fn revoke(repo: &Repository, trust: &Trust, signer: &dyn Signer, identity: Oid) -> Result<Oid> {
-    let keep = keep_of(repo, trust, identity)?;
+    let retention: RetentionMap = retention_of(repo, trust, identity)?;
     update(
         repo,
         trust,
         signer,
         "policy.revoke",
-        json!({ "identity": identity.to_string(), "keep": keep_to_json(&keep) }),
+        json!({ "identity": identity.to_string(), "keep": retention_to_json(&retention) }),
     )
 }
 
@@ -446,13 +453,14 @@ fn loaded(trust: &Trust) -> Result<&(Oid, Policy)> {
         .ok_or_else(|| Error::Policy("no policy; run `fullgit policy init`".into()))
 }
 
-fn keep_of(repo: &Repository, trust: &Trust, identity: Oid) -> Result<Keep> {
-    let keys = trust
+/// Retention map for revoking or demoting `identity`: what this clone has seen.
+fn retention_of(repo: &Repository, trust: &Trust, identity: Oid) -> Result<RetentionMap> {
+    let keys: Vec<KeyData> = trust
         .identities
         .get(&identity)
         .map(|i| i.all_keys())
         .unwrap_or_default();
-    trust::keep_for(repo, &keys)
+    trust::retention_for(repo, &keys)
 }
 
 fn update(

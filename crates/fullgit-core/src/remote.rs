@@ -13,7 +13,7 @@ use crate::refs;
 /// bare `git push` pushes.
 pub fn install_fetch_refspec(repo: &Repository, remote: &str) -> Result<bool> {
     drop_legacy(repo, remote)?;
-    let spec = refs::fetch_refspec(remote);
+    let spec: String = refs::fetch_refspec(remote);
     if has_refspec(repo, remote, &spec)? {
         return Ok(false);
     }
@@ -43,8 +43,9 @@ pub fn is_legacy(repo: &Repository, remote: &str) -> Result<bool> {
 /// Removes the old refspec and the remote branches it fetched. They only
 /// mirror the remote, so nothing is lost: the next fetch fills the new
 /// place.
+/// Stops fetching fullgit refs into `refs/remotes/<remote>/fullgit/`.
 fn drop_legacy(repo: &Repository, remote: &str) -> Result<()> {
-    let legacy = refs::legacy_fetch_refspec(remote);
+    let legacy: String = refs::legacy_fetch_refspec(remote);
     if has_refspec(repo, remote, &legacy)? {
         let pattern: String = legacy
             .chars()
@@ -57,7 +58,7 @@ fn drop_legacy(repo: &Repository, remote: &str) -> Result<()> {
         repo.config()?
             .remove_multivar(&format!("remote.{remote}.fetch"), &format!("^{pattern}$"))?;
     }
-    let mut names = Vec::new();
+    let mut names: Vec<String> = Vec::new();
     for r in repo.references_glob(&format!("{}*", refs::legacy_tracking_prefix(remote)))? {
         names.push(r?.name()?.to_owned());
     }

@@ -10,9 +10,9 @@ use fullgit_core::pr::{self, Comment, Place, Pr, Side, Status, Verdict, What};
 use fullgit_core::secret::DRIVER;
 use git2::{Oid, Patch};
 
-use super::html::{back, esc, markdown, short, state_badge, url_encode};
+use super::html::{back, escape_for_html, markdown, short, state_badge, url_encode};
 use super::issues::{comment_box, event};
-use super::{Ctx, Req, Resp, with_param};
+use super::{HandlerResult, PageContext, ParsedRequest, with_param};
 use crate::commands::pr::{
     count, current_branch, default_branch, describe, file_lines, merge_now, range,
 };
@@ -21,15 +21,15 @@ use crate::date;
 /// Lines of diff shown before giving up on a page.
 const MAX_LINES: usize = 8000;
 
-pub fn summary(ctx: &Ctx) -> Result<String> {
-    let mut open = loaded(ctx)?;
+pub fn summary(ctx: &PageContext) -> Result<String> {
+    let mut open = load_all(ctx)?;
     open.retain(|(_, p)| p.status == Status::Open);
     let mut s = format!(
         r#"<div class="list" style="margin-bottom:20px"><div class="head"><b>Open pull requests</b><span class="spacer"></span><a href="/prs">All {}</a></div>"#,
         open.len()
     );
     for (id, p) in open.iter().take(8) {
-        s.push_str(&row(ctx, *id, p));
+        s.push_str(&list_row(ctx, *id, p));
     }
     if open.is_empty() {
         s.push_str(r#"<div class="empty">No open pull requests.</div>"#);
@@ -38,7 +38,7 @@ pub fn summary(ctx: &Ctx) -> Result<String> {
     Ok(s)
 }
 
-fn loaded(ctx: &Ctx) -> Result<Vec<(Oid, Pr)>> {
+fn load_all(ctx: &PageContext) -> Result<Vec<(Oid, Pr)>> {
     let mut all: Vec<_> = pr::all(ctx.repo, &ctx.trust)?
         .into_iter()
         .filter_map(|(id, l)| Some((id, l.ok()?.model)))
@@ -47,7 +47,7 @@ fn loaded(ctx: &Ctx) -> Result<Vec<(Oid, Pr)>> {
     Ok(all)
 }
 
-fn row(ctx: &Ctx, id: Oid, p: &Pr) -> String {
+fn list_row(ctx: &PageContext, id: Oid, p: &Pr) -> String {
     let chip = match p.status {
         Status::Open => {
             let r = p.readiness(&ctx.trust);
@@ -68,18 +68,18 @@ fn row(ctx: &Ctx, id: Oid, p: &Pr) -> String {
         r#"<div class="row"><span class="dot {st}"></span><div><a class="t" href="/prs/{s}">{t}</a>{chip}<div class="sub">#{s} by {who} · <code class="ref">{src}</code> → <code class="ref">{tgt}</code> · r{n} · updated {when}</div></div></div>"#,
         st = p.status.as_str(),
         s = ctx.prs.of(id),
-        t = esc(&p.title),
-        who = esc(&ctx.who(p.author)),
-        src = esc(&p.source),
-        tgt = esc(&p.target),
+        t = escape_for_html(&p.title),
+        who = escape_for_html(&ctx.who(p.author)),
+        src = escape_for_html(&p.source),
+        tgt = escape_for_html(&p.target),
         n = p.revisions.len(),
         when = date(p.updated()),
     )
 }
 
-pub fn list(ctx: &Ctx, req: &Req) -> Result<Resp> {
-    let state = req.q("state").unwrap_or("open");
-    let all = loaded(ctx)?;
+pub fn list(ctx: &PageContext, req: &ParsedRequest) -> Result<HandlerResult> {
+    let state = req.query_param("state").unwrap_or("open");
+    let all = load_all(ctx)?;
     let count = |s: Status| all.iter().filter(|(_, p)| p.status == s).count();
     let tab = |key: &str, text: String| {
         let on = if key == state { " class=\"on\"" } else { "" };
@@ -100,7 +100,7 @@ pub fn list(ctx: &Ctx, req: &Req) -> Result<Resp> {
     let mut shown = 0;
     for (id, p) in &all {
         if state == "all" || p.status.as_str() == state {
-            body.push_str(&row(ctx, *id, p));
+            body.push_str(&list_row(ctx, *id, p));
             shown += 1;
         }
     }
@@ -111,7 +111,7 @@ pub fn list(ctx: &Ctx, req: &Req) -> Result<Resp> {
     Ok(ctx.page(req, "Pull requests", body))
 }
 
-pub fn new_form(ctx: &Ctx, req: &Req) -> Result<Resp> {
+pub fn new_form(ctx: &PageContext, req: &ParsedRequest) -> Result<HandlerResult> {
     // A locked key still gets the form; the page asks for the passphrase.
     if !ctx.locked() {
         ctx.signer()?;
@@ -130,7 +130,11 @@ pub fn new_form(ctx: &Ctx, req: &Req) -> Result<Resp> {
         } else {
             ""
         };
-        let _ = write!(options, r#"<option{selected}>{}</option>"#, esc(name));
+        let _ = write!(
+            options,
+            r#"<option{selected}>{}</option>"#,
+            escape_for_html(name)
+        );
     }
     let body = format!(
         r#"<h1>New pull request</h1><form class="stack" method="post" action="/prs/new">{}
@@ -141,51 +145,51 @@ pub fn new_form(ctx: &Ctx, req: &Req) -> Result<Resp> {
 <p class="meta">The branch's commits travel with the pull request when you sync; it doesn't need pushing.</p>
 <div class="actions"><button class="btn primary">Open pull request</button></div></form>"#,
         back("/prs/new"),
-        esc(&target)
+        escape_for_html(&target)
     );
     Ok(ctx.page(req, "New pull request", body))
 }
 
-pub fn create(ctx: &Ctx, req: &Req) -> Result<Resp> {
-    let (source, target) = (req.need("source")?, req.need("target")?);
+pub fn create(ctx: &PageContext, req: &ParsedRequest) -> Result<HandlerResult> {
+    let (source, target) = (req.require_form_field("source")?, req.require_form_field("target")?);
     let (head, base, _) = range(ctx.repo, ctx.remote, source, target)?;
     let id = pr::create(
         ctx.repo,
         &ctx.trust,
         ctx.signer()?,
-        req.need("title")?,
-        req.field("body").unwrap_or_default().trim(),
+        req.require_form_field("title")?,
+        req.form_field("body").unwrap_or_default().trim(),
         source,
         target,
         head,
         base,
     )?;
-    Ok(Resp::Redirect(with_param(
+    Ok(HandlerResult::Redirect(with_param(
         &format!("/prs/{}", ctx.prs.of(id)),
         "msg",
         "Opened. Sync shares it, with its commits.",
     )))
 }
 
-fn header(ctx: &Ctx, id: Oid, p: &Pr, tab: &str) -> String {
+fn header(ctx: &PageContext, id: Oid, p: &Pr, tab: &str) -> String {
     let latest = p.latest();
     let commits = count(ctx.repo, latest.head, latest.base).map_or("?".into(), |n| n.to_string());
     let on = |t: &str| if t == tab { r#" class="on""# } else { "" };
     format!(
         r#"<h1>{} <span class="id">#{s}</span></h1><div class="meta">{} {} wants to merge {commits} commit(s) into <code class="ref">{}</code> from <code class="ref">{}</code></div>
 <div class="tabs"><a{} href="/prs/{s}">Conversation</a><a{} href="/prs/{s}/diff">Files changed</a></div>"#,
-        esc(&p.title),
+        escape_for_html(&p.title),
         state_badge(p.status.as_str()),
         ctx.person(p.author),
-        esc(&p.target),
-        esc(&p.source),
+        escape_for_html(&p.target),
+        escape_for_html(&p.source),
         on("conversation"),
         on("diff"),
         s = ctx.prs.of(id),
     )
 }
 
-pub fn show(ctx: &Ctx, req: &Req, id: Oid) -> Result<Resp> {
+pub fn show(ctx: &PageContext, req: &ParsedRequest, id: Oid) -> Result<HandlerResult> {
     let loaded = pr::load(ctx.repo, &ctx.trust, id)?;
     let p = &loaded.model;
     let here = format!("/prs/{}", ctx.prs.of(id));
@@ -211,7 +215,7 @@ pub fn show(ctx: &Ctx, req: &Req, id: Oid) -> Result<Resp> {
                 let note = if r.note.is_empty() {
                     String::new()
                 } else {
-                    format!(": {}", esc(&r.note))
+                    format!(": {}", escape_for_html(&r.note))
                 };
                 let what = format!(
                     r#"pushed <a href="{here}/diff?r={v}">r{v}</a>{note} (<a href="{here}/diff?r={v}&since={n}">changes since r{n}</a>)"#,
@@ -269,7 +273,7 @@ pub fn show(ctx: &Ctx, req: &Req, id: Oid) -> Result<Resp> {
                 let what = format!(
                     "merged r{} into <code class=\"ref\">{}</code> as <code>{}</code>",
                     m.revision + 1,
-                    esc(&p.target),
+                    escape_for_html(&p.target),
                     &m.commit.to_string()[..12]
                 );
                 event(
@@ -324,12 +328,12 @@ pub fn show(ctx: &Ctx, req: &Req, id: Oid) -> Result<Resp> {
     Ok(ctx.page(req, &p.title, b))
 }
 
-fn merge_box(ctx: &Ctx, p: &Pr, here: &str) -> String {
+fn merge_box(ctx: &PageContext, p: &Pr, here: &str) -> String {
     let r = p.readiness(&ctx.trust);
     let class = if r.ready() { "ready" } else { "notready" };
     let mut s = format!(
         r#"<div class="box {class}"><div class="bd pad"><b>{}</b>"#,
-        esc(&describe(&ctx.trust, &r))
+        escape_for_html(&describe(&ctx.trust, &r))
     );
     if ctx.can(Role::Maintainer) {
         let disabled = if r.ready() { "" } else { " disabled" };
@@ -338,15 +342,15 @@ fn merge_box(ctx: &Ctx, p: &Pr, here: &str) -> String {
             r#"<form method="post" action="{here}/merge" class="actions">{}<span class="meta">Syncs, merges r{} into <code class="ref">{}</code> on {}, and pushes.</span><button class="btn primary"{disabled}>Merge pull request</button></form>"#,
             back(here),
             p.revisions.len(),
-            esc(&p.target),
-            esc(ctx.remote)
+            escape_for_html(&p.target),
+            escape_for_html(ctx.remote)
         );
     }
     s.push_str("</div></div>");
     s
 }
 
-fn sidebar(ctx: &Ctx, b: &mut String, p: &Pr, here: &str) {
+fn sidebar(ctx: &PageContext, b: &mut String, p: &Pr, here: &str) {
     b.push_str(r#"<section class="revs"><h3>Revisions</h3>"#);
     for (n, r) in p.revisions.iter().enumerate().rev() {
         let commits = count(ctx.repo, r.head, r.base).map_or("?".into(), |c| c.to_string());
@@ -381,20 +385,20 @@ fn sidebar(ctx: &Ctx, b: &mut String, p: &Pr, here: &str) {
             b,
             r#"<section><details><summary>Edit title and description</summary><form class="stack" method="post" action="{here}/edit">{}<input type="text" name="title" value="{}"><textarea name="body" rows="8">{}</textarea><button class="btn">Save</button></form></details></section>"#,
             back(here),
-            esc(&p.title),
-            esc(&p.body)
+            escape_for_html(&p.title),
+            escape_for_html(&p.body)
         );
     }
 }
 
 /// A comment and its replies. Line comments show the code they're on;
 /// `link` adds a link to that line in the diff.
-fn thread(ctx: &Ctx, id: Oid, p: &Pr, root: &Comment, back_to: &str, link: bool) -> String {
+fn thread(ctx: &PageContext, id: Oid, p: &Pr, root: &Comment, back_to: &str, link: bool) -> String {
     let here = format!("/prs/{}", ctx.prs.of(id));
     let mut s = format!(r#"<div class="box thread" id="c-{}">"#, short(root.id));
     match &root.location {
         Some(l) => {
-            let path = esc(&l.path);
+            let path = escape_for_html(&l.path);
             let place = if link {
                 format!(
                     r#"<a href="{here}/diff?r={}#{}">{path}:{}</a>"#,
@@ -460,7 +464,7 @@ fn thread(ctx: &Ctx, id: Oid, p: &Pr, root: &Comment, back_to: &str, link: bool)
     s
 }
 
-fn edit_form(ctx: &Ctx, here: &str, c: &Comment, back_to: &str) -> String {
+fn edit_form(ctx: &PageContext, here: &str, c: &Comment, back_to: &str) -> String {
     if ctx.me_id() != Some(c.author) {
         return String::new();
     }
@@ -468,12 +472,12 @@ fn edit_form(ctx: &Ctx, here: &str, c: &Comment, back_to: &str) -> String {
         r#"<details><summary>Edit</summary><form class="stack" method="post" action="{here}/edit-comment">{}<input type="hidden" name="comment" value="{}"><textarea name="body">{}</textarea><div class="actions"><button class="btn">Save</button></div></form></details>"#,
         back(back_to),
         c.id,
-        esc(&c.body)
+        escape_for_html(&c.body)
     )
 }
 
 /// The commented line and the two before it.
-fn snippet(ctx: &Ctx, p: &Pr, l: &pr::Location) -> String {
+fn snippet(ctx: &PageContext, p: &Pr, l: &pr::Location) -> String {
     let Ok(lines) = file_lines(ctx.repo, &p.revisions[l.revision], &l.path, l.side) else {
         return String::new();
     };
@@ -482,9 +486,9 @@ fn snippet(ctx: &Ctx, p: &Pr, l: &pr::Location) -> String {
     for n in line.saturating_sub(2).max(1)..=line.min(lines.len()) {
         let text = format!("{n:>5}  {}", lines[n - 1]);
         if n == line {
-            let _ = write!(s, r#"<span class="hl">{}</span>"#, esc(&text));
+            let _ = write!(s, r#"<span class="hl">{}</span>"#, escape_for_html(&text));
         } else {
-            let _ = writeln!(s, "{}", esc(&text));
+            let _ = writeln!(s, "{}", escape_for_html(&text));
         }
     }
     s.push_str("</pre>");
@@ -500,9 +504,9 @@ fn anchor(path: &str, side: Side, line: u32) -> String {
     format!("L{hash:08x}{side}{line}")
 }
 
-pub fn diff(ctx: &Ctx, req: &Req, id: Oid) -> Result<Resp> {
+pub fn diff(ctx: &PageContext, req: &ParsedRequest, id: Oid) -> Result<HandlerResult> {
     let p = pr::load(ctx.repo, &ctx.trust, id)?.model;
-    let n = match req.q("r") {
+    let n = match req.query_param("r") {
         None => p.revisions.len(),
         Some(v) => v
             .parse()
@@ -511,7 +515,7 @@ pub fn diff(ctx: &Ctx, req: &Req, id: Oid) -> Result<Resp> {
             .context("no such revision")?,
     };
     let since = req
-        .q("since")
+        .query_param("since")
         .map(|v| {
             v.parse::<usize>()
                 .ok()
@@ -565,7 +569,7 @@ pub fn diff(ctx: &Ctx, req: &Req, id: Oid) -> Result<Resp> {
                 revision: n - 1,
                 here: &here,
                 page: format!("{here}/diff?r={n}"),
-                at: req.q("at").zip(req.q("file")),
+                at: req.query_param("at").zip(req.query_param("file")),
             };
             b.push_str(&render(ctx, r.base, r.head, Some(&comments))?);
         }
@@ -585,7 +589,7 @@ struct Commenting<'a> {
     at: Option<(&'a str, &'a str)>,
 }
 
-fn render(ctx: &Ctx, from: Oid, to: Oid, comments: Option<&Commenting>) -> Result<String> {
+fn render(ctx: &PageContext, from: Oid, to: Oid, comments: Option<&Commenting>) -> Result<String> {
     let repo = ctx.repo;
     let (a, b) = (
         repo.find_commit(from)?.tree()?,
@@ -630,8 +634,8 @@ fn render(ctx: &Ctx, from: Oid, to: Oid, comments: Option<&Commenting>) -> Resul
             .path()
             .map(|p| p.to_string_lossy().into_owned());
         let title = match &old_path {
-            Some(o) if *o != path => format!("{} → {}", esc(o), esc(&path)),
-            _ => esc(&path),
+            Some(o) if *o != path => format!("{} → {}", escape_for_html(o), escape_for_html(&path)),
+            _ => escape_for_html(&path),
         };
         let (adds, dels) = patch.line_stats().map_or((0, 0), |(_, a, d)| (a, d));
         let _ = write!(
@@ -668,7 +672,7 @@ fn render(ctx: &Ctx, from: Oid, to: Oid, comments: Option<&Commenting>) -> Resul
             let _ = write!(
                 s,
                 r#"<tr class="hunk"><td class="n"></td><td class="n"></td><td class="c">{}</td></tr>"#,
-                esc(String::from_utf8_lossy(hunk.header()).trim_end())
+                escape_for_html(String::from_utf8_lossy(hunk.header()).trim_end())
             );
             for l in 0..lines {
                 let line = patch.line_in_hunk(h, l)?;
@@ -704,7 +708,7 @@ fn render(ctx: &Ctx, from: Oid, to: Oid, comments: Option<&Commenting>) -> Resul
                 let _ = write!(
                     s,
                     r#"<tr class="{class}" id="{id}"><td class="n">{old}</td><td class="n">{new}</td><td class="c">{}</td></tr>"#,
-                    esc(text.trim_end_matches(['\n', '\r']))
+                    escape_for_html(text.trim_end_matches(['\n', '\r']))
                 );
                 let Some(c) = comments else { continue };
                 for t in threads.iter().filter(|t| {
@@ -725,7 +729,7 @@ fn render(ctx: &Ctx, from: Oid, to: Oid, comments: Option<&Commenting>) -> Resul
                         r#"<tr class="note"><td colspan="3"><form class="stack" method="post" action="{}/comment">{}<input type="hidden" name="path" value="{}"><input type="hidden" name="line" value="{number}"><input type="hidden" name="side" value="{}"><input type="hidden" name="revision" value="{}"><textarea name="body" placeholder="Comment on line {number}" autofocus></textarea><div class="actions"><a class="btn" href="{}#{id}">Cancel</a><button class="btn primary">Comment</button></div></form></td></tr>"#,
                         c.here,
                         back(&format!("{}#{id}", c.page)),
-                        esc(&path),
+                        escape_for_html(&path),
                         side.as_str(),
                         c.p.revisions[c.revision].id,
                         c.page,
@@ -751,7 +755,7 @@ fn render(ctx: &Ctx, from: Oid, to: Oid, comments: Option<&Commenting>) -> Resul
     Ok(s)
 }
 
-fn range_diff(ctx: &Ctx, base1: Oid, head1: Oid, base2: Oid, head2: Oid) -> Result<String> {
+fn range_diff(ctx: &PageContext, base1: Oid, head1: Oid, base2: Oid, head2: Oid) -> Result<String> {
     let out = std::process::Command::new("git")
         .arg("--git-dir")
         .arg(ctx.repo.path())
@@ -770,36 +774,42 @@ fn range_diff(ctx: &Ctx, base1: Oid, head1: Oid, base2: Oid, head2: Oid) -> Resu
     }
     Ok(format!(
         r#"<pre class="code">{}</pre>"#,
-        esc(&String::from_utf8_lossy(&out.stdout))
+        escape_for_html(&String::from_utf8_lossy(&out.stdout))
     ))
 }
 
-pub fn act(ctx: &Ctx, req: &Req, id: Oid, action: &str) -> Result<Resp> {
+/// Handles POST actions on a pull request (comment, review, merge, and so on).
+pub fn handle_action(
+    ctx: &PageContext,
+    req: &ParsedRequest,
+    id: Oid,
+    action: &str,
+) -> Result<HandlerResult> {
     let here = format!("/prs/{}", ctx.prs.of(id));
     let back_to = super::back_of(req).to_owned();
     if action == "merge" {
         let _pass = super::ssh_passphrase(ctx)?;
         let msg = merge_now(ctx.repo, ctx.signer()?, id, ctx.remote)?;
-        return Ok(Resp::Redirect(with_param(&here, "msg", &msg)));
+        return Ok(HandlerResult::Redirect(with_param(&here, "msg", &msg)));
     }
     let signer = ctx.signer()?;
     let (repo, trust) = (ctx.repo, &ctx.trust);
     let current = pr::load(repo, trust, id)?.model;
     let msg = match action {
         "comment" => {
-            let body = req.field("body").unwrap_or_default().trim();
-            let then = req.field("then");
+            let body = req.form_field("body").unwrap_or_default().trim();
+            let then = req.form_field("then");
             if body.is_empty() && then.is_none() {
                 bail!("write a comment first");
             }
             if !body.is_empty() {
-                let place = match (req.field("reply"), req.field("path")) {
+                let place = match (req.form_field("reply"), req.form_field("path")) {
                     (Some(to), _) => Place::Reply(Oid::from_str(to)?),
                     (None, Some(path)) => Place::Line {
-                        revision: Oid::from_str(req.need("revision")?)?,
+                        revision: Oid::from_str(req.require_form_field("revision")?)?,
                         path,
-                        line: req.need("line")?.parse()?,
-                        side: req.need("side")?.parse().map_err(anyhow::Error::msg)?,
+                        line: req.require_form_field("line")?.parse()?,
+                        side: req.require_form_field("side")?.parse().map_err(anyhow::Error::msg)?,
                     },
                     (None, None) => Place::General,
                 };
@@ -818,8 +828,8 @@ pub fn act(ctx: &Ctx, req: &Req, id: Oid, action: &str) -> Result<Resp> {
             }
         }
         "review" => {
-            let verdict: Verdict = req.need("verdict")?.parse().map_err(anyhow::Error::msg)?;
-            let body = req.field("body").unwrap_or_default().trim();
+            let verdict: Verdict = req.require_form_field("verdict")?.parse().map_err(anyhow::Error::msg)?;
+            let body = req.form_field("body").unwrap_or_default().trim();
             if verdict == Verdict::Changes && body.is_empty() {
                 bail!("say what should change");
             }
@@ -830,9 +840,9 @@ pub fn act(ctx: &Ctx, req: &Req, id: Oid, action: &str) -> Result<Resp> {
             }
         }
         "edit" => {
-            let title = req.need("title")?;
+            let title = req.require_form_field("title")?;
             // A field left out means unchanged.
-            let body = req.field("body").map(str::trim);
+            let body = req.form_field("body").map(str::trim);
             let title = (title != current.title).then_some(title);
             let body = body.filter(|b| *b != current.body);
             if title.is_none() && body.is_none() {
@@ -842,8 +852,8 @@ pub fn act(ctx: &Ctx, req: &Req, id: Oid, action: &str) -> Result<Resp> {
             "Saved."
         }
         "edit-comment" => {
-            let comment = Oid::from_str(req.need("comment")?)?;
-            pr::edit_comment(repo, trust, signer, id, comment, req.need("body")?)?;
+            let comment = Oid::from_str(req.require_form_field("comment")?)?;
+            pr::edit_comment(repo, trust, signer, id, comment, req.require_form_field("body")?)?;
             "Comment saved."
         }
         other => bail!("unknown action {other}"),
@@ -853,5 +863,5 @@ pub fn act(ctx: &Ctx, req: &Req, id: Oid, action: &str) -> Result<Resp> {
     } else {
         here
     };
-    Ok(Resp::Redirect(with_param(&to, "msg", msg)))
+    Ok(HandlerResult::Redirect(with_param(&to, "msg", msg)))
 }

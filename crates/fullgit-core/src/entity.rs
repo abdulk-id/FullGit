@@ -22,9 +22,9 @@ pub fn append(
     kind: &str,
     payload: serde_json::Value,
 ) -> Result<Oid> {
-    let refname = refs::qualify(refname);
-    let head = head_of(repo, &refname)?;
-    let id = write_op(repo, signer, head.as_slice(), kind, payload)?;
+    let refname: String = refs::qualify(refname);
+    let head: Option<Oid> = current_head_oid(repo, &refname)?;
+    let id: Oid = write_op(repo, signer, head.as_slice(), kind, payload)?;
     update_ref(repo, &refname, id, head, kind)?;
     Ok(id)
 }
@@ -60,8 +60,8 @@ pub fn merge(
     signer: Option<&dyn Signer>,
     other: Oid,
 ) -> Result<Merged> {
-    let refname = refs::qualify(refname);
-    let Some(local) = head_of(repo, &refname)? else {
+    let refname: String = refs::qualify(refname);
+    let Some(local): Option<Oid> = current_head_oid(repo, &refname)? else {
         update_ref(repo, &refname, other, None, "create")?;
         return Ok(Merged::Created(other));
     };
@@ -72,11 +72,11 @@ pub fn merge(
         update_ref(repo, &refname, other, Some(local), "fast-forward")?;
         return Ok(Merged::FastForwarded(other));
     }
-    let signer = signer.ok_or_else(|| Error::NeedsSigner(refname.clone()))?;
+    let signer: &dyn Signer = signer.ok_or_else(|| Error::NeedsSigner(refname.clone()))?;
     // Sorted parents keep the merge commit independent of who performs it.
-    let mut parents = [local, other];
+    let mut parents: [Oid; 2] = [local, other];
     parents.sort();
-    let id = write_op(repo, signer, &parents, MERGE_KIND, serde_json::Value::Null)?;
+    let id: Oid = write_op(repo, signer, &parents, MERGE_KIND, serde_json::Value::Null)?;
     update_ref(repo, &refname, id, Some(local), MERGE_KIND)?;
     Ok(Merged::Merged(id))
 }
@@ -85,12 +85,12 @@ pub fn merge(
 /// operation's signature and lamport clock are checked.
 pub fn load(repo: &Repository, heads: &[Oid]) -> Result<Vec<StoredOp>> {
     let mut ops: HashMap<Oid, StoredOp> = HashMap::new();
-    let mut stack = heads.to_vec();
+    let mut stack: Vec<Oid> = heads.to_vec();
     while let Some(id) = stack.pop() {
         if ops.contains_key(&id) {
             continue;
         }
-        let op = read_op(repo, id)?;
+        let op: StoredOp = read_op(repo, id)?;
         stack.extend(&op.parents);
         ops.insert(id, op);
     }
@@ -98,7 +98,7 @@ pub fn load(repo: &Repository, heads: &[Oid]) -> Result<Vec<StoredOp>> {
     let mut pending: HashMap<Oid, usize> = HashMap::new();
     let mut children: BTreeMap<Oid, Vec<Oid>> = BTreeMap::new();
     for op in ops.values() {
-        let expected = 1 + op
+        let expected: u64 = 1 + op
             .parents
             .iter()
             .map(|p| ops[p].op.lamport)
@@ -123,10 +123,10 @@ pub fn load(repo: &Repository, heads: &[Oid]) -> Result<Vec<StoredOp>> {
         .filter(|(_, n)| **n == 0)
         .map(|(id, _)| Reverse((ops[id].op.lamport, *id)))
         .collect();
-    let mut order = Vec::with_capacity(ops.len());
+    let mut order: Vec<StoredOp> = Vec::with_capacity(ops.len());
     while let Some(Reverse((_, id))) = ready.pop() {
         for child in children.get(&id).into_iter().flatten() {
-            let n = pending.get_mut(child).expect("child is loaded");
+            let n: &mut usize = pending.get_mut(child).expect("child is loaded");
             *n -= 1;
             if *n == 0 {
                 ready.push(Reverse((ops[child].op.lamport, *child)));
@@ -137,7 +137,8 @@ pub fn load(repo: &Repository, heads: &[Oid]) -> Result<Vec<StoredOp>> {
     Ok(order)
 }
 
-fn head_of(repo: &Repository, refname: &str) -> Result<Option<Oid>> {
+/// The commit `refname` points at, if the ref exists.
+fn current_head_oid(repo: &Repository, refname: &str) -> Result<Option<Oid>> {
     match repo.refname_to_id(refname) {
         Ok(id) => Ok(Some(id)),
         Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(None),
@@ -152,8 +153,8 @@ fn update_ref(
     expected: Option<Oid>,
     msg: &str,
 ) -> Result<()> {
-    let msg = format!("fullgit: {msg}");
-    let res = match expected {
+    let msg: String = format!("fullgit: {msg}");
+    let res: Result<git2::Reference, git2::Error> = match expected {
         Some(old) => repo.reference_matching(refname, new, true, old, &msg),
         None => repo.reference(refname, new, false, &msg),
     };

@@ -1,4 +1,4 @@
-//! Subcommands with their own argument types.
+//! CLI subcommand modules: each file defines a `*Cmd` clap enum and a `run` entry point.
 
 pub mod doctor;
 pub mod hook;

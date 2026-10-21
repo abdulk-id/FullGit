@@ -1,9 +1,9 @@
 {
   "v": 1,
   "type": "policy.label_describe",
-  "lamport": 7,
+  "lamport": 8,
   "payload": {
-    "description": "An improvement to how something already works",
-    "label": "change"
+    "description": "Something new to build",
+    "label": "feature"
   }
 }

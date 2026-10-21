@@ -1,8 +1,8 @@
 {
   "v": 1,
   "type": "issue.comment",
-  "lamport": 3,
+  "lamport": 4,
   "payload": {
-    "body": "Issues and PRs should have a tag saying which issue or PR they are tracking from GitHub for a consistent link between the GitHub object and FullGit's copied object. For example, record the issue/PR number from GitHub alongside FullGit's issue/PR number."
+    "body": "Also disallow editing comments that were imported from GitHub. Otherwise there could be sync issues where FullGit's comment does not mirror GitHub's comment."
   }
 }

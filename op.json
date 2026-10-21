@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "type": "issue.create",
+  "lamport": 1,
+  "payload": {
+    "body": "- Allow closing issues as either of three: \"Close as completed\", \"Close as not planned\", and \"Close as duplicate\"\r\n- Add relationships between issues. An issue can block another or be blocked by another issue.",
+    "labels": [
+      "feature"
+    ],
+    "nonce": "18e065dda7ea48a1529de",
+    "title": "More features in Issues"
+  }
+}

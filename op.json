@@ -1,8 +1,11 @@
 {
   "v": 1,
   "type": "issue.comment",
-  "lamport": 6,
+  "lamport": 7,
   "payload": {
-    "body": "Another comment made from FullGit"
+    "body": "@abdulk-id: Reopening issue with another comment from GitHub",
+    "github": {
+      "note": "comment:6305435209"
+    }
   }
 }

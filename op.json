@@ -1,11 +1,8 @@
 {
   "v": 1,
-  "type": "issue.comment",
-  "lamport": 7,
+  "type": "issue.status",
+  "lamport": 8,
   "payload": {
-    "body": "@abdulk-id: Reopening issue with another comment from GitHub",
-    "github": {
-      "note": "comment:6305435209"
-    }
+    "status": "open"
   }
 }

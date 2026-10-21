@@ -1,8 +1,8 @@
 {
   "v": 1,
-  "type": "issue.status",
-  "lamport": 5,
+  "type": "issue.comment",
+  "lamport": 6,
   "payload": {
-    "status": "closed"
+    "body": "Another comment made from FullGit"
   }
 }

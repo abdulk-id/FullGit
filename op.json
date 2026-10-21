@@ -1,11 +1,11 @@
 {
   "v": 1,
   "type": "issue.comment",
-  "lamport": 2,
+  "lamport": 3,
   "payload": {
-    "body": "@abdulk-id: Comment on this GitHub issue to test bridge's updating functionality",
+    "body": "@abdulk-id: Closing issue as completed to test bridge's updating functionality",
     "github": {
-      "note": "comment:6305339906"
+      "note": "comment:6305386310"
     }
   }
 }

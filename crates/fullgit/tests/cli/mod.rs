@@ -16,12 +16,17 @@ pub struct Out {
 }
 
 pub fn run(dir: &Path, program: &str, args: &[&str]) -> Out {
+    run_with(dir, program, args, &[])
+}
+
+pub fn run_with(dir: &Path, program: &str, args: &[&str], env: &[(&str, &str)]) -> Out {
     let out = Command::new(program)
         .current_dir(dir)
         .args(args)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env_remove("GIT_EDITOR")
+        .envs(env.iter().copied())
         .output()
         .unwrap();
     Out {
@@ -33,6 +38,10 @@ pub fn run(dir: &Path, program: &str, args: &[&str]) -> Out {
 
 pub fn fg(dir: &Path, args: &[&str]) -> Out {
     run(dir, env!("CARGO_BIN_EXE_fullgit"), args)
+}
+
+pub fn fg_with(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Out {
+    run_with(dir, env!("CARGO_BIN_EXE_fullgit"), args, env)
 }
 
 pub fn fg_ok(dir: &Path, args: &[&str]) -> String {

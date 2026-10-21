@@ -2,10 +2,11 @@
 
 mod cli;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use cli::common::{Fixture, git};
 use cli::{fg, fg_ok, user};
+use serde_json::{Value, json};
 
 fn commit(dir: &Path, file: &str, content: &str) {
     std::fs::write(dir.join(file), content).unwrap();
@@ -20,15 +21,18 @@ fn comment_id(show: &str, marker: &str) -> String {
     line[start..].trim_end_matches(')').to_owned()
 }
 
-#[test]
-fn pull_requests_are_reviewed_revised_and_merged() {
-    let fx = Fixture::new();
+fn json(dir: &Path, args: &[&str]) -> Value {
+    let out = fg_ok(dir, args);
+    serde_json::from_str(&out).unwrap_or_else(|e| panic!("{args:?}: {e}\n{out}"))
+}
+
+/// Alice owns the repo; Bob contributes; master takes one approval.
+/// Returns the remote, Alice's clone and Bob's.
+fn setup(fx: &Fixture) -> (PathBuf, PathBuf, PathBuf) {
     let remote = fx.bare("remote.git");
     git(&remote, &["symbolic-ref", "HEAD", "refs/heads/master"]);
-    let alice = user(&fx, &remote, "alice");
-    let bob = user(&fx, &remote, "bob");
-
-    // Alice owns the repo; Bob contributes; master takes one approval.
+    let alice = user(fx, &remote, "alice");
+    let bob = user(fx, &remote, "bob");
     commit(&alice, "lib.rs", "fn a() {}\n");
     fg_ok(&alice, &["policy", "init"]);
     git(&alice, &["add", ".fullgit/root"]);
@@ -45,6 +49,13 @@ fn pull_requests_are_reviewed_revised_and_merged() {
     git(&bob, &["remote", "set-head", "origin", "--auto"]);
     fg_ok(&bob, &["init"]);
     fg_ok(&bob, &["sync"]);
+    (remote, alice, bob)
+}
+
+#[test]
+fn pull_requests_are_reviewed_revised_and_merged() {
+    let fx = Fixture::new();
+    let (remote, alice, bob) = setup(&fx);
 
     git(&bob, &["checkout", "-q", "-b", "retry"]);
     commit(&bob, "lib.rs", "fn a() {}\nfn retry() {}\n");
@@ -180,4 +191,110 @@ fn pull_requests_are_reviewed_revised_and_merged() {
         "{}",
         out.stderr
     );
+}
+
+#[test]
+fn pull_requests_print_json_for_scripts() {
+    let fx = Fixture::new();
+    let (_remote, alice, bob) = setup(&fx);
+    assert_eq!(json(&bob, &["pr", "list", "--json"]), json!([]));
+
+    git(&bob, &["checkout", "-q", "-b", "retry"]);
+    commit(&bob, "lib.rs", "fn a() {}\nfn retry() {}\n");
+    let new = json(&bob, &["pr", "new", "-t", "Retry sync", "--json"]);
+    let id = new["id"].as_str().unwrap().to_owned();
+    assert_eq!(id.len(), 40, "{new}");
+    assert_eq!(new["source"], "retry");
+    assert_eq!(new["target"], "master");
+    assert_eq!(new["revisions"][0]["number"], 1);
+    assert_eq!(new["revisions"][0]["commits"], 1);
+    assert_eq!(new["head"], git(&bob, &["rev-parse", "retry"]).trim());
+    fg_ok(&bob, &["sync"]);
+    fg_ok(&alice, &["sync"]);
+
+    let line = json(
+        &alice,
+        &[
+            "pr", "comment", &id, "--file", "lib.rs", "--line", "2", "-m", "Backoff?", "--json",
+        ],
+    );
+    assert_eq!(line["pull_request"], id.as_str());
+    assert_eq!(
+        line["location"],
+        json!({
+            "revision": 1,
+            "revision_id": id,
+            "path": "lib.rs",
+            "line": 2,
+            "side": "new",
+        })
+    );
+    let line_id = line["id"].as_str().unwrap();
+    fg_ok(
+        &alice,
+        &["pr", "review", &id, "--request-changes", "-m", "See above"],
+    );
+
+    let list = json(&alice, &["pr", "list", "--json"]);
+    let [p] = list.as_array().unwrap().as_slice() else {
+        panic!("{list}");
+    };
+    assert_eq!(p["id"], id.as_str());
+    assert_eq!(p["author"]["name"], "bob");
+    assert_eq!(p["revisions"], 1);
+    assert_eq!(p["comments"], 1);
+    let r = &p["readiness"];
+    assert_eq!(r["ready"], false);
+    assert_eq!(r["approvals_required"], 1);
+    assert_eq!(r["approvals_missing"], 1);
+    assert_eq!(r["changes_requested"][0]["name"], "alice");
+
+    let reply = json(
+        &alice,
+        &[
+            "pr",
+            "comment",
+            &id[..8],
+            "--reply",
+            line_id,
+            "-m",
+            "Or a retry limit",
+            "--json",
+        ],
+    );
+    assert_eq!(reply["reply_to"], line_id);
+    fg_ok(&alice, &["pr", "review", &id, "--approve"]);
+    fg_ok(&alice, &["sync"]);
+    fg_ok(&alice, &["pr", "merge", &id]);
+
+    let show = json(&alice, &["pr", "show", &id, "--json"]);
+    assert_eq!(show["status"], "merged");
+    assert_eq!(show["readiness"], Value::Null);
+    assert_eq!(show["merged"]["revision"], 1);
+    assert_eq!(show["merged"]["approvals"][0]["name"], "alice");
+    let verdicts: Vec<_> = show["reviews"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["verdict"].as_str().unwrap())
+        .collect();
+    assert_eq!(verdicts, ["changes", "approve"]);
+    let types: Vec<_> = show["timeline"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["type"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        types,
+        [
+            "opened",
+            "commented",
+            "reviewed",
+            "commented",
+            "reviewed",
+            "merged"
+        ]
+    );
+    assert_eq!(show["ignored"], json!([]));
 }

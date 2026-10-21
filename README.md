@@ -114,7 +114,9 @@ fullgit issue comment 6de2 -m "Reproduced."
 fullgit issue close 6de2
 ```
 
-Leave out `-t` or `-m` and your editor opens.
+Leave out `-t` or `-m` and your editor opens. Outside a terminal it doesn't, unless `GIT_EDITOR` is set: the command fails instead of waiting.
+
+For scripts and agents, `list`, `show`, `new` and `comment` take `--json`, for issues and pull requests alike. It prints full ids and Unix times, and for pull requests, whether they may be merged.
 
 ### Pull requests
 

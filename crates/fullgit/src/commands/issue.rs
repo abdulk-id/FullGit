@@ -1,11 +1,14 @@
 //! `fullgit issue`: issues.
 
+use std::io::IsTerminal;
+
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use fullgit_core::Trust;
 use fullgit_core::issue::{self, Issue, Status, What};
-use fullgit_core::model::{self, Abbrev};
+use fullgit_core::model::{self, Abbrev, Loaded};
 use git2::{Oid, Repository};
+use serde_json::{Value, json};
 
 use crate::{current_user_with_signer, date, resolve_identity, short_oid};
 
@@ -22,6 +25,9 @@ pub enum IssueCmd {
         /// A label the policy lists (`fullgit policy show`).
         #[arg(long = "label", short)]
         labels: Vec<String>,
+        /// Print the new issue as `issue show --json` does.
+        #[arg(long)]
+        json: bool,
     },
     /// List issues, open ones by default, most recently updated first.
     List {
@@ -37,14 +43,25 @@ pub enum IssueCmd {
         assignee: Option<String>,
         #[arg(long)]
         author: Option<String>,
+        /// Print a JSON array, without descriptions, comments or history.
+        #[arg(long)]
+        json: bool,
     },
     /// Show an issue with its comments and history.
-    Show { id: String },
+    Show {
+        id: String,
+        /// Print JSON, with full ids and Unix times.
+        #[arg(long)]
+        json: bool,
+    },
     /// Comment on an issue. Without -m, opens your editor.
     Comment {
         id: String,
         #[arg(long, short = 'm')]
         body: Option<String>,
+        /// Print the new comment as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Change an issue's title or description. Without either, opens your
     /// editor on both.
@@ -101,6 +118,7 @@ pub fn run(repo: &Repository, cmd: IssueCmd) -> Result<()> {
             title,
             body,
             labels,
+            json,
         } => {
             let (signer, _) = current_user_with_signer(repo, &trust)?;
             let (title, body) = match title {
@@ -115,7 +133,12 @@ pub fn run(repo: &Repository, cmd: IssueCmd) -> Result<()> {
                 }
             };
             let id = issue::create(repo, &trust, &signer, &title, &body, &labels)?;
-            println!("opened issue {}; `fullgit sync` shares it", name(repo, id)?);
+            if json {
+                let loaded = issue::load(repo, &trust, id)?;
+                print_json(&issue_json(&trust, id, &name(repo, id)?, &loaded))?;
+            } else {
+                println!("opened issue {}; `fullgit sync` shares it", name(repo, id)?);
+            }
         }
         IssueCmd::List {
             closed,
@@ -123,6 +146,7 @@ pub fn run(repo: &Repository, cmd: IssueCmd) -> Result<()> {
             labels,
             assignee,
             author,
+            json,
         } => {
             let assignee: Option<Oid> = assignee
                 .map(|w| resolve_identity(repo, &trust, &w))
@@ -149,6 +173,13 @@ pub fn run(repo: &Repository, cmd: IssueCmd) -> Result<()> {
                 }
             }
             shown.sort_by_key(|(id, i)| (std::cmp::Reverse(i.updated()), *id));
+            if json {
+                let list: Vec<_> = shown
+                    .iter()
+                    .map(|(id, i)| summary_json(&trust, *id, &names.of(*id), i))
+                    .collect();
+                return print_json(&Value::Array(list));
+            }
             for (id, i) in &shown {
                 let labels = if i.labels.is_empty() {
                     String::new()
@@ -168,9 +199,12 @@ pub fn run(repo: &Repository, cmd: IssueCmd) -> Result<()> {
                 println!("no issues");
             }
         }
-        IssueCmd::Show { id } => {
+        IssueCmd::Show { id, json } => {
             let id = issue::resolve(repo, &id)?;
             let loaded = issue::load(repo, &trust, id)?;
+            if json {
+                return print_json(&issue_json(&trust, id, &name(repo, id)?, &loaded));
+            }
             show(&trust, &name(repo, id)?, &loaded.model);
             if !loaded.rejected.is_empty() {
                 eprintln!();
@@ -180,14 +214,26 @@ pub fn run(repo: &Repository, cmd: IssueCmd) -> Result<()> {
                 }
             }
         }
-        IssueCmd::Comment { id, body } => {
+        IssueCmd::Comment { id, body, json } => {
             let (signer, _) = current_user_with_signer(repo, &trust)?;
             let id = issue::resolve(repo, &id)?;
             let body = match body {
                 Some(b) => b,
                 None => editor(repo, "", "Your comment.")?,
             };
-            issue::comment(repo, &trust, &signer, id, &body)?;
+            let comment = issue::comment(repo, &trust, &signer, id, &body)?;
+            if json {
+                let i = issue::load(repo, &trust, id)?.model;
+                let c = i
+                    .comments
+                    .iter()
+                    .find(|c| c.id == comment)
+                    .context("the new comment is missing")?;
+                let short = Abbrev::new(i.comments.iter().map(|c| c.id)).of(c.id);
+                let mut c = comment_json(&trust, c, &short);
+                c["issue"] = id.to_string().into();
+                print_json(&c)?;
+            }
         }
         IssueCmd::Edit { id, title, body } => {
             let (signer, _) = current_user_with_signer(repo, &trust)?;
@@ -356,6 +402,97 @@ fn show(trust: &Trust, name: &str, i: &Issue) {
     }
 }
 
+pub(crate) fn print_json(v: &Value) -> Result<()> {
+    println!("{}", serde_json::to_string_pretty(v)?);
+    Ok(())
+}
+
+/// A person by full id, with their name and email if their identity is
+/// known here.
+pub(crate) fn person_json(trust: &Trust, id: Oid) -> Value {
+    let i = trust.identities.get(&id);
+    json!({
+        "id": id.to_string(),
+        "name": i.map(|i| &i.name),
+        "email": i.map(|i| &i.email),
+    })
+}
+
+/// What `issue list --json` prints for each issue.
+fn summary_json(trust: &Trust, id: Oid, short: &str, i: &Issue) -> Value {
+    json!({
+        "id": id.to_string(),
+        "short_id": short,
+        "title": i.title,
+        "status": i.status.as_str(),
+        "labels": i.labels,
+        "unlisted_labels": i.unlisted,
+        "author": i.author.map(|a| person_json(trust, a)),
+        "assignees": i.assignees.iter().map(|a| person_json(trust, *a)).collect::<Vec<_>>(),
+        "created": i.created(),
+        "updated": i.updated(),
+        "comments": i.comments.len(),
+    })
+}
+
+fn comment_json(trust: &Trust, c: &issue::Comment, short: &str) -> Value {
+    json!({
+        "id": c.id.to_string(),
+        "short_id": short,
+        "author": person_json(trust, c.author),
+        "time": c.time,
+        "body": c.body,
+        "edited": c.edited,
+    })
+}
+
+/// What `issue show --json` prints: the summary, plus the description,
+/// comments, history, and operations ignored as invalid.
+fn issue_json(trust: &Trust, id: Oid, short: &str, loaded: &Loaded<Issue>) -> Value {
+    let i = &loaded.model;
+    let shorts = Abbrev::new(i.comments.iter().map(|c| c.id));
+    let mut v = summary_json(trust, id, short, i);
+    v["body"] = i.body.clone().into();
+    v["comments"] = i
+        .comments
+        .iter()
+        .map(|c| comment_json(trust, c, &shorts.of(c.id)))
+        .collect();
+    v["timeline"] = i
+        .timeline
+        .iter()
+        .map(|e| {
+            let mut ev = match &e.what {
+                What::Opened => json!({"type": "opened"}),
+                What::Edited => json!({"type": "edited"}),
+                What::Commented(n) => {
+                    json!({"type": "commented", "comment": i.comments[*n].id.to_string()})
+                }
+                What::Labeled { add, remove } => {
+                    json!({"type": "labeled", "add": add, "remove": remove})
+                }
+                What::Assigned { add, remove } => json!({
+                    "type": "assigned",
+                    "add": add.iter().map(|a| person_json(trust, *a)).collect::<Vec<_>>(),
+                    "remove": remove.iter().map(|a| person_json(trust, *a)).collect::<Vec<_>>(),
+                }),
+                What::Status(Status::Closed) => json!({"type": "closed"}),
+                What::Status(Status::Open) => json!({"type": "reopened"}),
+            };
+            ev["op"] = e.op.to_string().into();
+            ev["actor"] = person_json(trust, e.actor);
+            ev["time"] = e.time.into();
+            ev
+        })
+        .collect();
+    v["ignored"] = loaded
+        .rejected
+        .iter()
+        .map(|r| json!({"op": r.op.to_string(), "reason": r.reason.to_string()}))
+        .collect();
+    v
+}
+
 pub(crate) fn print_indented(text: &str) {
     for line in text.trim_end().lines() {
         println!("    {line}");
@@ -395,6 +532,11 @@ pub(crate) fn split_title(text: &str) -> Result<(String, String)> {
 /// Lets the user write text in git's editor. Lines starting with `#` are
 /// dropped; empty text aborts.
 pub(crate) fn editor(repo: &Repository, initial: &str, help: &str) -> Result<String> {
+    // A terminal editor started by a script or agent would wait forever;
+    // GIT_EDITOR is how a caller says it has one that needs no terminal.
+    if !std::io::stdin().is_terminal() && std::env::var_os("GIT_EDITOR").is_none() {
+        bail!("not running in a terminal, so no editor; pass the text on the command line");
+    }
     let out = std::process::Command::new("git")
         .arg("--git-dir")
         .arg(repo.path())

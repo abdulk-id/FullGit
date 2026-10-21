@@ -4,13 +4,16 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use clap::{ArgGroup, Subcommand};
-use fullgit_core::model::{self, Abbrev};
+use fullgit_core::model::{self, Abbrev, Loaded};
 use fullgit_core::pr::{self, Location, Merging, Place, Pr, Readiness, Revision, Side, Status};
 use fullgit_core::pr::{Verdict, What};
 use fullgit_core::{Role, Signer, Trust, sync};
 use git2::{Oid, Repository};
+use serde_json::{Value, json};
 
-use crate::commands::issue::{editor, print_indented, short_id, split_title, who};
+use crate::commands::issue::{
+    editor, person_json, print_indented, print_json, short_id, split_title, who,
+};
 use crate::{
     current_user_with_signer, date, identity_of, resolve_identity, short_oid,
     signer_from_git_config,
@@ -37,6 +40,9 @@ pub enum PrCmd {
         /// Whose copy of the target to compare against.
         #[arg(long, default_value = "origin")]
         remote: String,
+        /// Print the new pull request as `pr show --json` does.
+        #[arg(long)]
+        json: bool,
     },
     /// List pull requests, open ones by default, most recently updated
     /// first.
@@ -50,10 +56,20 @@ pub enum PrCmd {
         /// `me`, an email or an id prefix.
         #[arg(long)]
         author: Option<String>,
+        /// Print a JSON array, without descriptions, revisions, comments,
+        /// reviews or history.
+        #[arg(long)]
+        json: bool,
     },
     /// Show a pull request: revisions, comments, reviews, and whether it
     /// may be merged.
-    Show { id: String },
+    Show {
+        id: String,
+        /// Print JSON, with full ids, Unix times, and revisions numbered
+        /// from 1.
+        #[arg(long)]
+        json: bool,
+    },
     /// Show a revision's changes, or what changed between revisions.
     Diff {
         id: String,
@@ -105,6 +121,9 @@ pub enum PrCmd {
         /// Reply in a comment's thread.
         #[arg(long)]
         reply: Option<String>,
+        /// Print the new comment as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Edit one of your comments. Without -m, opens your editor.
     EditComment {
@@ -167,6 +186,7 @@ pub fn run(repo: &Repository, cmd: PrCmd) -> Result<()> {
             source,
             target,
             remote,
+            json,
         } => {
             let (signer, _) = current_user_with_signer(repo, &trust)?;
             let source = match source {
@@ -196,6 +216,10 @@ pub fn run(repo: &Repository, cmd: PrCmd) -> Result<()> {
             let id = pr::create(
                 repo, &trust, &signer, &title, &body, &source, &target, head, base,
             )?;
+            if json {
+                let loaded = pr::load(repo, &trust, id)?;
+                return print_json(&pr_json(repo, &trust, id, &name(repo, id)?, &loaded));
+            }
             println!(
                 "opened pull request {} ({source} → {target}, {commits} commit(s)); \
                  `fullgit sync` shares it",
@@ -207,6 +231,7 @@ pub fn run(repo: &Repository, cmd: PrCmd) -> Result<()> {
             merged,
             all,
             author,
+            json,
         } => {
             let author = author
                 .map(|w| resolve_identity(repo, &trust, &w))
@@ -232,6 +257,13 @@ pub fn run(repo: &Repository, cmd: PrCmd) -> Result<()> {
                 }
             }
             shown.sort_by_key(|(id, p)| (std::cmp::Reverse(p.updated()), *id));
+            if json {
+                let list: Vec<_> = shown
+                    .iter()
+                    .map(|(id, p)| summary_json(&trust, *id, &names.of(*id), p))
+                    .collect();
+                return print_json(&Value::Array(list));
+            }
             for (id, p) in &shown {
                 let state = match p.status {
                     Status::Open => {
@@ -261,9 +293,12 @@ pub fn run(repo: &Repository, cmd: PrCmd) -> Result<()> {
                 println!("no pull requests");
             }
         }
-        PrCmd::Show { id } => {
+        PrCmd::Show { id, json } => {
             let id = pr::resolve(repo, &id)?;
             let loaded = pr::load(repo, &trust, id)?;
+            if json {
+                return print_json(&pr_json(repo, &trust, id, &name(repo, id)?, &loaded));
+            }
             show(repo, &trust, &name(repo, id)?, &loaded.model);
             if !loaded.rejected.is_empty() {
                 eprintln!();
@@ -362,6 +397,7 @@ pub fn run(repo: &Repository, cmd: PrCmd) -> Result<()> {
             old,
             revision,
             reply,
+            json,
         } => {
             let (signer, _) = current_user_with_signer(repo, &trust)?;
             let id = pr::resolve(repo, &id)?;
@@ -395,7 +431,19 @@ pub fn run(repo: &Repository, cmd: PrCmd) -> Result<()> {
                 Some(b) => b,
                 None => editor(repo, "", "Your comment.")?,
             };
-            pr::comment(repo, &trust, &signer, id, &body, place)?;
+            let comment = pr::comment(repo, &trust, &signer, id, &body, place)?;
+            if json {
+                let p = pr::load(repo, &trust, id)?.model;
+                let c = p
+                    .comments
+                    .iter()
+                    .find(|c| c.id == comment)
+                    .context("the new comment is missing")?;
+                let short = Abbrev::new(p.comments.iter().map(|c| c.id)).of(c.id);
+                let mut c = comment_json(&trust, &p, c, &short);
+                c["pull_request"] = id.to_string().into();
+                print_json(&c)?;
+            }
         }
         PrCmd::EditComment { id, comment, body } => {
             let (signer, _) = current_user_with_signer(repo, &trust)?;
@@ -740,6 +788,150 @@ fn show(repo: &Repository, trust: &Trust, name: &str, p: &Pr) {
     if p.status == Status::Open {
         println!("\n{}", describe(trust, &p.readiness(trust)));
     }
+}
+
+fn people_json<'a>(trust: &Trust, ids: impl IntoIterator<Item = &'a Oid>) -> Vec<Value> {
+    ids.into_iter().map(|id| person_json(trust, *id)).collect()
+}
+
+/// Whether an open pull request may be merged; null once it isn't open.
+fn readiness_json(trust: &Trust, p: &Pr) -> Value {
+    if p.status != Status::Open {
+        return Value::Null;
+    }
+    let r = p.readiness(trust);
+    json!({
+        "ready": r.ready(),
+        "approvals_required": r.rule.as_ref().map_or(0, |rule| rule.approvals),
+        "approvals_group": r.rule.as_ref().and_then(|rule| rule.group.as_ref()),
+        "approvals_missing": r.missing(),
+        "approvals": people_json(trust, &r.approvals),
+        "changes_requested": people_json(trust, &r.changes),
+    })
+}
+
+/// What `pr list --json` prints for each pull request.
+fn summary_json(trust: &Trust, id: Oid, short: &str, p: &Pr) -> Value {
+    json!({
+        "id": id.to_string(),
+        "short_id": short,
+        "title": p.title,
+        "status": p.status.as_str(),
+        "source": p.source,
+        "target": p.target,
+        "author": p.author.map(|a| person_json(trust, a)),
+        "head": p.latest().head.to_string(),
+        "revisions": p.revisions.len(),
+        "comments": p.comments.len(),
+        "created": p.created(),
+        "updated": p.updated(),
+        "readiness": readiness_json(trust, p),
+    })
+}
+
+fn comment_json(trust: &Trust, p: &Pr, c: &pr::Comment, short: &str) -> Value {
+    json!({
+        "id": c.id.to_string(),
+        "short_id": short,
+        "author": person_json(trust, c.author),
+        "time": c.time,
+        "body": c.body,
+        "edited": c.edited,
+        "location": c.location.as_ref().map(|l| json!({
+            "revision": l.revision + 1,
+            "revision_id": p.revisions[l.revision].id.to_string(),
+            "path": l.path,
+            "line": l.line,
+            "side": l.side.as_str(),
+        })),
+        "reply_to": c.reply_to.map(|r| r.to_string()),
+    })
+}
+
+/// What `pr show --json` prints: the summary, plus the description,
+/// revisions, comments, reviews, the merge, history, and operations
+/// ignored as invalid.
+fn pr_json(repo: &Repository, trust: &Trust, id: Oid, short: &str, loaded: &Loaded<Pr>) -> Value {
+    let p = &loaded.model;
+    let shorts = Abbrev::new(p.comments.iter().map(|c| c.id));
+    let mut v = summary_json(trust, id, short, p);
+    v["body"] = p.body.clone().into();
+    v["revisions"] = p
+        .revisions
+        .iter()
+        .enumerate()
+        .map(|(n, r)| {
+            json!({
+                "number": n + 1,
+                "id": r.id.to_string(),
+                "head": r.head.to_string(),
+                "base": r.base.to_string(),
+                // Null when the commits haven't been fetched.
+                "commits": count(repo, r.head, r.base).ok(),
+                "author": person_json(trust, r.author),
+                "time": r.time,
+                "note": r.note,
+            })
+        })
+        .collect();
+    v["comments"] = p
+        .comments
+        .iter()
+        .map(|c| comment_json(trust, p, c, &shorts.of(c.id)))
+        .collect();
+    v["reviews"] = p
+        .reviews
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.id.to_string(),
+                "reviewer": person_json(trust, r.reviewer),
+                "time": r.time,
+                "revision": r.revision + 1,
+                "verdict": r.verdict.as_str(),
+                "body": r.body,
+            })
+        })
+        .collect();
+    v["merged"] = p.merged.as_ref().map_or(Value::Null, |m| {
+        json!({
+            "by": person_json(trust, m.by),
+            "time": m.time,
+            "revision": m.revision + 1,
+            "commit": m.commit.to_string(),
+            "approvals": people_json(trust, &m.approvals),
+        })
+    });
+    v["timeline"] = p
+        .timeline
+        .iter()
+        .map(|e| {
+            let mut ev = match &e.what {
+                What::Opened => json!({"type": "opened"}),
+                What::Edited => json!({"type": "edited"}),
+                What::Revised(n) => json!({"type": "revised", "revision": n + 1}),
+                What::Commented(n) => {
+                    json!({"type": "commented", "comment": p.comments[*n].id.to_string()})
+                }
+                What::Reviewed(n) => {
+                    json!({"type": "reviewed", "review": p.reviews[*n].id.to_string()})
+                }
+                What::Status(Status::Open) => json!({"type": "reopened"}),
+                What::Status(_) => json!({"type": "closed"}),
+                What::Merged => json!({"type": "merged"}),
+            };
+            ev["op"] = e.op.to_string().into();
+            ev["actor"] = person_json(trust, e.actor);
+            ev["time"] = e.time.into();
+            ev
+        })
+        .collect();
+    v["ignored"] = loaded
+        .rejected
+        .iter()
+        .map(|r| json!({"op": r.op.to_string(), "reason": r.reason.to_string()}))
+        .collect();
+    v
 }
 
 /// E.g. `not ready to merge: 0 of 1 approvals from reviewers; changes

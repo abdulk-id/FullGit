@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "type": "issue.create",
+  "lamport": 1,
+  "payload": {
+    "body": "Currently the web UI shows timestamps (like for activity on issues) in UTC. The backend should be keeping time only in UTC for consistency, but frontends should display the time in the user's timezone",
+    "labels": [
+      "change"
+    ],
+    "nonce": "18e065fe82665309529de",
+    "title": "Timezone display"
+  }
+}

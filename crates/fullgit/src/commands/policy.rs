@@ -60,6 +60,13 @@ pub enum LabelCmd {
         #[arg(required = true)]
         labels: Vec<String>,
     },
+    /// Records what a label is for; an empty description clears it.
+    Describe {
+        label: String,
+        /// One line, e.g. "Something is broken".
+        #[arg(required = true)]
+        description: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -120,9 +127,25 @@ pub fn run(repo: &Repository, cmd: PolicyCmd) -> Result<()> {
                 );
             }
             let labels: Vec<_> = policy.labels.iter().map(String::as_str).collect();
-            match labels.is_empty() {
-                true => println!("no labels"),
-                false => println!("labels: {}", labels.join(", ")),
+            if labels.is_empty() {
+                println!("no labels");
+            } else if policy.descriptions.is_empty() {
+                println!("labels: {}", labels.join(", "));
+            } else {
+                println!("labels:");
+                let width = labels.iter().map(|l| l.len()).max().unwrap_or(0);
+                for l in labels {
+                    println!(
+                        "  {:<width$}  {}",
+                        l,
+                        policy
+                            .descriptions
+                            .get(l)
+                            .map(String::as_str)
+                            .unwrap_or("-"),
+                        width = width
+                    );
+                }
             }
         }
         PolicyCmd::Grant { who, role } => {
@@ -196,15 +219,21 @@ pub fn run(repo: &Repository, cmd: PolicyCmd) -> Result<()> {
         PolicyCmd::Label(cmd) => {
             let trust = Trust::load(repo)?;
             let (signer, _) = current_user_with_signer(repo, &trust)?;
-            let (labels, add) = match cmd {
-                LabelCmd::Add { labels } => (labels, true),
-                LabelCmd::Remove { labels } => (labels, false),
-            };
-            for l in &labels {
-                match add {
-                    true => policy::label_add(repo, &trust, &signer, l)?,
-                    false => policy::label_remove(repo, &trust, &signer, l)?,
-                };
+            match cmd {
+                LabelCmd::Add { labels } => {
+                    for l in &labels {
+                        policy::label_add(repo, &trust, &signer, l, None)?;
+                    }
+                }
+                LabelCmd::Remove { labels } => {
+                    for l in &labels {
+                        policy::label_remove(repo, &trust, &signer, l)?;
+                    }
+                }
+                LabelCmd::Describe { label, description } => {
+                    let description = description.join(" ");
+                    policy::label_describe(repo, &trust, &signer, &label, &description)?;
+                }
             }
         }
     }

@@ -153,11 +153,17 @@ fn label_picker(ctx: &PageContext, current: &BTreeSet<String>) -> String {
         return r#"<p class="meta">No labels yet; maintainers add them in <a href="/settings">Settings</a>.</p>"#.into();
     }
     let mut s = String::from(r#"<div class="pick">"#);
+    let described = issue::descriptions(&ctx.trust);
     for l in listed {
         let checked = if current.contains(l) { " checked" } else { "" };
+        // Described labels say what they are for, on hover.
+        let title = match described.get(l) {
+            Some(d) => format!(r#" title="{}""#, escape_for_html(d)),
+            None => String::new(),
+        };
         let _ = write!(
             s,
-            r#"<label><input type="checkbox" name="label" value="{0}"{checked}> <span class="label">{0}</span></label>"#,
+            r#"<label><input type="checkbox" name="label" value="{0}"{checked}> <span class="label"{title}>{0}</span></label>"#,
             escape_for_html(l)
         );
     }

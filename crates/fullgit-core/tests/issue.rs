@@ -39,7 +39,7 @@ fn roles_decide_who_may_do_what() {
         policy::grant(&repo, &trust(&repo), &alice, id, role).unwrap();
     }
     for l in ["bug", "p1"] {
-        policy::label_add(&repo, &trust(&repo), &alice, l).unwrap();
+        policy::label_add(&repo, &trust(&repo), &alice, l, None).unwrap();
     }
     let t = trust(&repo);
 
@@ -146,21 +146,24 @@ fn labels_come_from_the_policy() {
         &repo,
         &trust(&repo),
         &erin,
-        "bug"
+        "bug",
+        None
     )));
-    policy::label_add(&repo, &trust(&repo), &bob, "bug").unwrap();
-    policy::label_add(&repo, &trust(&repo), &alice, "docs").unwrap();
+    policy::label_add(&repo, &trust(&repo), &bob, "bug", None).unwrap();
+    policy::label_add(&repo, &trust(&repo), &alice, "docs", None).unwrap();
     assert!(rejected(policy::label_add(
         &repo,
         &trust(&repo),
         &bob,
-        "bug"
+        "bug",
+        None
     )));
     assert!(rejected(policy::label_add(
         &repo,
         &trust(&repo),
         &bob,
-        "two words"
+        "two words",
+        None
     )));
     assert!(rejected(policy::label_remove(
         &repo,
@@ -188,10 +191,70 @@ fn labels_come_from_the_policy() {
     let i = issue::load(&repo, &trust(&repo), id).unwrap().model;
     assert!(i.labels.is_empty());
     assert_eq!(i.unlisted.iter().collect::<Vec<_>>(), ["docs"]);
-    policy::label_add(&repo, &trust(&repo), &bob, "docs").unwrap();
+    policy::label_add(&repo, &trust(&repo), &bob, "docs", None).unwrap();
     let i = issue::load(&repo, &trust(&repo), id).unwrap().model;
     assert_eq!(i.labels.iter().collect::<Vec<_>>(), ["docs"]);
     assert!(i.unlisted.is_empty());
+}
+
+#[test]
+fn labels_carry_descriptions() {
+    let fx = Fixture::new();
+    let (_, repo) = fx.repo("r");
+    let (alice, a) = person(&repo, &fx, "alice");
+    let (bob, b) = person(&repo, &fx, "bob");
+    policy::genesis(&repo, &trust(&repo), &alice, &[a]).unwrap();
+    policy::grant(&repo, &trust(&repo), &alice, b, Role::Maintainer).unwrap();
+
+    // A label may be born with its description.
+    policy::label_add(
+        &repo,
+        &trust(&repo),
+        &alice,
+        "bug",
+        Some("Something is broken"),
+    )
+    .unwrap();
+    let d = issue::descriptions(&trust(&repo));
+    assert_eq!(
+        d.get("bug").map(String::as_str),
+        Some("Something is broken")
+    );
+
+    // Only labels the policy lists can be described.
+    assert!(rejected(policy::label_describe(
+        &repo,
+        &trust(&repo),
+        &bob,
+        "docs",
+        "For the docs"
+    )));
+
+    // An empty description clears it.
+    policy::label_describe(&repo, &trust(&repo), &bob, "bug", "").unwrap();
+    assert!(issue::descriptions(&trust(&repo)).is_empty());
+
+    // Descriptions are one line, of some length.
+    policy::label_describe(&repo, &trust(&repo), &bob, "bug", "Works again").unwrap();
+    assert!(rejected(policy::label_describe(
+        &repo,
+        &trust(&repo),
+        &bob,
+        "bug",
+        "two\nlines"
+    )));
+    assert!(rejected(policy::label_describe(
+        &repo,
+        &trust(&repo),
+        &bob,
+        "bug",
+        &"x".repeat(201)
+    )));
+    // Taking a label off the list forgets its description.
+    policy::label_add(&repo, &trust(&repo), &bob, "p1", None).unwrap();
+    policy::label_describe(&repo, &trust(&repo), &bob, "p1", "Urgent").unwrap();
+    policy::label_remove(&repo, &trust(&repo), &bob, "p1").unwrap();
+    assert!(!issue::descriptions(&trust(&repo)).contains_key("p1"));
 }
 
 #[test]
@@ -210,7 +273,7 @@ fn concurrent_changes_converge() {
     sync_all();
     let root = policy::genesis(&ra, &trust(&ra), &sa, &[a, b]).unwrap();
     for l in ["ci", "tests"] {
-        policy::label_add(&ra, &trust(&ra), &sa, l).unwrap();
+        policy::label_add(&ra, &trust(&ra), &sa, l, None).unwrap();
     }
     policy::pin(&rb, root).unwrap();
     sync_all();

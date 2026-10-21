@@ -124,6 +124,33 @@ fn labels_are_kept_in_the_policy() {
     fg_ok(&alice, &["policy", "label", "add", "bug", "docs"]);
     assert!(fg_ok(&alice, &["policy", "show"]).contains("labels: bug, docs"));
 
+    // Labels may say what they are for.
+    fg_ok(
+        &alice,
+        &["policy", "label", "describe", "bug", "Something is broken"],
+    );
+    let show = fg_ok(&alice, &["policy", "show"]);
+    assert!(
+        show.contains("Something is broken") && !show.contains("labels: bug, docs"),
+        "{show}"
+    );
+    // Unquoted words become one description; an empty one clears it.
+    fg_ok(
+        &alice,
+        &[
+            "policy", "label", "describe", "docs", "Docs", "and", "guides",
+        ],
+    );
+    assert!(fg_ok(&alice, &["policy", "show"]).contains("Docs and guides"));
+    fg_ok(&alice, &["policy", "label", "describe", "docs", ""]);
+    assert!(!fg_ok(&alice, &["policy", "show"]).contains("Docs and guides"));
+    let out = fg(&alice, &["policy", "label", "describe", "p1", "x"]);
+    assert!(
+        !out.ok && out.stderr.contains("p1 is not a label"),
+        "{}",
+        out.stderr
+    );
+
     let out = fg(&alice, &["issue", "new", "-t", "x", "-l", "wontfix"]);
     assert!(
         !out.ok

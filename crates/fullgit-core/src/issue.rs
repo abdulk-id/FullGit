@@ -14,7 +14,7 @@
 //! refused when written, and [`load`] sets aside those taken off the list
 //! since. Without a policy, any label goes.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use git2::{Oid, Repository};
 use serde_json::{Value, json};
@@ -266,6 +266,15 @@ pub fn valid_label(l: &str) -> Result<(), String> {
 /// The labels issues may carry, or `None` without a policy, when any may.
 pub fn available(trust: &Trust) -> Option<&BTreeSet<String>> {
     trust.policy.as_ref().map(|(_, p)| &p.labels)
+}
+
+/// What each label is for, when it is described; empty without a policy.
+pub fn descriptions(trust: &Trust) -> BTreeMap<String, String> {
+    trust
+        .policy
+        .as_ref()
+        .map(|(_, p)| p.descriptions.clone())
+        .unwrap_or_default()
 }
 
 /// Fails unless issues may carry each of `labels`.

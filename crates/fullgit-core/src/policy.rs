@@ -12,7 +12,8 @@
 //! `policy.revoke {identity, keep}`, `policy.group_add {group, identity}`,
 //! `policy.group_remove {group, identity}`,
 //! `policy.protect {branch, approvals, group?, since?}` (0 approvals
-//! unprotects), `policy.label_add {label}`, `policy.label_remove {label}`.
+//! unprotects), `policy.label_add {label, description?}`,
+//! `policy.label_describe {label, description}`, `policy.label_remove {label}`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -42,6 +43,8 @@ pub struct Policy {
     pub rules: BTreeMap<String, Rule>,
     /// The labels issues may carry.
     pub labels: BTreeSet<String>,
+    /// What each of them is for, when it is described.
+    pub descriptions: BTreeMap<String, String>,
 }
 
 /// What merging a pull request into a branch takes.
@@ -204,9 +207,28 @@ impl Model for Policy {
             "policy.label_add" => {
                 let label = payload::required_string(p, "label")?;
                 crate::issue::valid_label(label)?;
+                let description = match payload::optional_string(p, "description")? {
+                    Some(d) => Some(valid_description(d)?),
+                    None => None,
+                };
                 if !self.labels.insert(label.to_owned()) {
                     return Err(format!("{label} is already a label"));
                 }
+                if let Some(d) = description {
+                    self.descriptions.insert(label.to_owned(), d);
+                }
+                Ok(())
+            }
+            "policy.label_describe" => {
+                let label = payload::required_string(p, "label")?;
+                let description = valid_description(payload::required_string(p, "description")?)?;
+                if !self.labels.contains(label) {
+                    return Err(format!("{label} is not a label"));
+                }
+                match description.is_empty() {
+                    true => self.descriptions.remove(label),
+                    false => self.descriptions.insert(label.to_owned(), description),
+                };
                 Ok(())
             }
             "policy.label_remove" => {
@@ -214,6 +236,7 @@ impl Model for Policy {
                 if !self.labels.remove(label) {
                     return Err(format!("{label} is not a label"));
                 }
+                self.descriptions.remove(label);
                 Ok(())
             }
             kind => Err(format!("unknown operation {kind}")),
@@ -225,7 +248,9 @@ impl Model for Policy {
     /// didn't keep are dropped.
     fn still_valid(&self, op: &StoredOp, ctx: &ReplayContext) -> Result<(), String> {
         let role = match op.op.kind.as_str() {
-            "policy.label_add" | "policy.label_remove" => Role::Maintainer,
+            "policy.label_add" | "policy.label_describe" | "policy.label_remove" => {
+                Role::Maintainer
+            }
             _ => Role::Owner,
         };
         trust::actor(ctx.repo, &ctx.trust.identities, Some(self), ctx.entity, op).require(role)
@@ -238,6 +263,18 @@ fn group_member(p: &serde_json::Value) -> Result<(String, Oid), String> {
         return Err("group name is empty".into());
     }
     Ok((group.to_owned(), payload::required_oid(p, "identity")?))
+}
+
+/// A label's description: one line, at most 200 characters, saying what it
+/// is for. Empty clears it.
+fn valid_description(d: &str) -> Result<String, String> {
+    let d = d.trim();
+    if d.len() > 200 || d.contains('\n') || d.contains('\r') {
+        return Err(format!(
+            "{d:?}: label descriptions are one line of at most 200 characters"
+        ));
+    }
+    Ok(d.to_owned())
 }
 
 /// The policy this clone trusts: the pinned one, else the committed one.
@@ -412,19 +449,37 @@ pub fn protect(
     )
 }
 
-/// Makes `label` available to issues.
+/// Makes `label` available to issues, described by `description` when given.
 pub fn label_add(
     repo: &Repository,
     trust: &Trust,
     signer: &dyn Signer,
     label: &str,
+    description: Option<&str>,
 ) -> Result<Oid> {
     update(
         repo,
         trust,
         signer,
         "policy.label_add",
-        json!({ "label": label }),
+        json!({ "label": label, "description": description }),
+    )
+}
+
+/// Records what `label` is for; an empty description clears it.
+pub fn label_describe(
+    repo: &Repository,
+    trust: &Trust,
+    signer: &dyn Signer,
+    label: &str,
+    description: &str,
+) -> Result<Oid> {
+    update(
+        repo,
+        trust,
+        signer,
+        "policy.label_describe",
+        json!({ "label": label, "description": description }),
     )
 }
 

@@ -128,8 +128,9 @@ Commit timestamps are informational only and never used for ordering.
   that drops fullgit deletes `.fullgit/root`.
 - Roles: `owner` > `maintainer` > `contributor` > `reader`. Groups are named sets of identities, e.g. `secrets:prod`.
 - Ops: `policy.grant {identity, role, keep?}`, `policy.revoke {identity, keep}`, `policy.group_add {group, identity}`,
-  `policy.group_remove`, `policy.label_add {label}`, `policy.label_remove {label}`. Only owners change the policy,
-  except the labels, which maintainers manage too. The last owner can't be removed.
+  `policy.group_remove`, `policy.label_add {label, description?}`, `policy.label_describe {label, description}`,
+  `policy.label_remove {label}`. Only owners change the policy, except the labels, which maintainers manage too. The
+  last owner can't be removed.
 - An operation's **actor** is the identity holding its signing key, with that identity's role. Each entity type
   decides what role each op needs.
 - **Revocation.** There's no trusted clock, so a revoked key could otherwise keep writing ops and claim they are old.

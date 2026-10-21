@@ -340,6 +340,32 @@ fn issues_and_pull_requests_in_the_browser() {
         let to = s.post("/settings/labels", &[("back", "/settings"), ("add", l)]);
         assert!(to.starts_with("/settings?msg=Added"), "{to}");
     }
+    // A label may say what it is for, right there.
+    let to = s.post(
+        "/settings/labels",
+        &[
+            ("back", "/settings"),
+            ("describe", "bug"),
+            ("description", "Something is broken"),
+        ],
+    );
+    assert!(to.starts_with("/settings?msg=Described"), "{to}");
+    let settings = s.get("/settings").body;
+    assert!(
+        settings.contains("Something is broken")
+            && settings.contains(r#"name="describe" value="bug""#),
+        "{settings}"
+    );
+    let to = s.post(
+        "/settings/labels",
+        &[
+            ("back", "/settings"),
+            ("describe", "bug"),
+            ("description", ""),
+        ],
+    );
+    assert!(to.starts_with("/settings?msg=Removed"), "{to}");
+    assert!(!s.get("/settings").body.contains("Something is broken"));
     let to = s.post(
         "/settings/labels",
         &[("back", "/settings"), ("add", "two words")],

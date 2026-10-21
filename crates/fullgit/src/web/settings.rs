@@ -37,6 +37,7 @@ pub fn show(ctx: &PageContext, req: &ParsedRequest) -> Result<HandlerResult> {
     if listed.is_empty() {
         b.push_str("<p>No labels yet.</p>");
     } else {
+        let described = issue::descriptions(&ctx.trust);
         b.push_str(r#"<table class="labels">"#);
         for l in listed {
             let n = used.get(l).copied().unwrap_or(0);
@@ -44,10 +45,12 @@ pub fn show(ctx: &PageContext, req: &ParsedRequest) -> Result<HandlerResult> {
                 true => button("remove", l, "Remove", " danger"),
                 false => String::new(),
             };
+            let d = described.get(l).map(String::as_str).unwrap_or("");
             let _ = write!(
                 b,
-                r#"<tr><td>{}</td><td class="meta">{n} issue(s)</td><td>{remove}</td></tr>"#,
-                label(l)
+                r#"<tr><td>{}</td><td>{}</td><td class="meta">{n} issue(s)</td><td>{remove}</td></tr>"#,
+                label(l),
+                describe_cell(edit, l, d)
             );
         }
         b.push_str("</table>");
@@ -89,22 +92,46 @@ fn button(field: &str, label: &str, text: &str, class: &str) -> String {
     )
 }
 
+/// The cell saying what `label` is for: its description, or, for a
+/// maintainer, a form that records it.
+fn describe_cell(edit: bool, label: &str, d: &str) -> String {
+    match edit {
+        false if d.is_empty() => String::new(),
+        false => format!(r#"<td>{}</td>"#, escape_for_html(d)),
+        true => format!(
+            r#"<td><details><summary>Edit</summary><form class="stack" method="post" action="/settings/labels">{}<input type="hidden" name="describe" value="{}"><input type="text" name="description" value="{}" placeholder="What is it for?"><button class="btn">Save</button></form></details></td>"#,
+            back("/settings"),
+            escape_for_html(label),
+            escape_for_html(d)
+        ),
+    }
+}
+
 pub fn labels(ctx: &PageContext, req: &ParsedRequest) -> Result<HandlerResult> {
     let signer = ctx.signer()?;
     let (repo, trust) = (ctx.repo, &ctx.trust);
     let msg = match (
         req.form_field("add").map(str::trim),
         req.form_field("remove"),
+        req.form_field("describe").map(str::trim),
     ) {
-        (Some(l), None) if !l.is_empty() => {
-            policy::label_add(repo, trust, signer, l)?;
+        (Some(l), None, None) if !l.is_empty() => {
+            policy::label_add(repo, trust, signer, l, None)?;
             format!("Added {l}. Sync shares it.")
         }
-        (None, Some(l)) => {
+        (None, Some(l), None) => {
             policy::label_remove(repo, trust, signer, l)?;
             format!("Removed {l}. Sync shares it.")
         }
-        _ => bail!("name a label to add or remove"),
+        (None, None, Some(l)) => {
+            let d = req.form_field("description").map(str::trim).unwrap_or("");
+            policy::label_describe(repo, trust, signer, l, d)?;
+            match d.is_empty() {
+                true => format!("Removed {l}'s description. Sync shares it."),
+                false => format!("Described {l}. Sync shares it."),
+            }
+        }
+        _ => bail!("name a label to add, remove or describe"),
     };
     Ok(HandlerResult::Redirect(with_param(
         "/settings",

@@ -332,7 +332,7 @@ fn ensure_labels(
                     skipped.push((name.clone(), "adding a label needs a maintainer".into()));
                     continue;
                 }
-                match crate::policy::label_add(repo, trust, signer, &label) {
+                match crate::policy::label_add(repo, trust, signer, &label, None) {
                     Ok(_) => {
                         have.insert(label.clone());
                         added.push(AddedLabel {

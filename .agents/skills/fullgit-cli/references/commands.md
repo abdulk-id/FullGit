@@ -41,6 +41,7 @@ Identities are named by `me`, an email address, or an id prefix.
 | `fullgit policy protect <branch> [--approvals N] [--group G] [--remote R]` | Require N approvals to merge pull requests into a branch. `--approvals 0` is refused; use `unprotect`. |
 | `fullgit policy unprotect <branch>`                                        | Remove a branch's merge rule.                                                                          |
 | `fullgit policy label add\|remove <label>...`                              | Manage the labels issues may carry. Maintainers may too.                                               |
+| `fullgit policy label describe <label> <description>`                       | Record what a label is for; an empty description clears it.                                            |
 
 Only owners change the policy, except labels, which maintainers manage too.
 

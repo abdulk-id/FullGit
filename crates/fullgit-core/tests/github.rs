@@ -100,7 +100,7 @@ fn imports_issues_and_updates_them_in_place() {
     let (_, repo) = fx.repo("r");
     let (alice, a) = person(&repo, &fx, "alice");
     policy::genesis(&repo, &trust(&repo), &alice, &[a]).unwrap();
-    policy::label_add(&repo, &trust(&repo), &alice, "bug").unwrap();
+    policy::label_add(&repo, &trust(&repo), &alice, "bug", None).unwrap();
 
     let snap = issue_snapshot(
         "Sync loses ops",

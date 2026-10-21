@@ -1,13 +1,8 @@
 {
   "v": 1,
-  "type": "issue.create",
-  "lamport": 1,
+  "type": "issue.edit",
+  "lamport": 2,
   "payload": {
-    "body": "Currently objects imported from GitHub (like issues and their comments) just say that the issue was imported from GitHub and add the GitHub username before every comment. There should be a non-editable tag somewhere on objects that are imported from other sources.",
-    "labels": [
-      "change"
-    ],
-    "nonce": "18e066261cbfb359529de",
-    "title": "Proper marking for imported objects instead of just appending GitHub username"
+    "title": "Proper handling for imported objects"
   }
 }

@@ -1,17 +1,11 @@
 {
   "v": 1,
-  "type": "issue.create",
-  "lamport": 1,
+  "type": "issue.comment",
+  "lamport": 2,
   "payload": {
-    "body": "Sample issue to test GitHub bridge\n\nImported from https://github.com/abdulk-id/FullGit/issues/1 by @abdulk-id.",
+    "body": "@abdulk-id: Comment on this GitHub issue to test bridge's updating functionality",
     "github": {
-      "number": 1,
-      "repo": "abdulk-id/FullGit"
-    },
-    "labels": [
-      "testing"
-    ],
-    "nonce": "18e065943226052552c0c",
-    "title": "Test GitHub Bridge"
+      "note": "comment:6305339906"
+    }
   }
 }
